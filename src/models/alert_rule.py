@@ -27,8 +27,30 @@ class AlertRule(Base):
             name="alert_rules_operator_check",
         ),
         CheckConstraint(
-            "severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH')",
+            "severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')",
             name="alert_rules_severity_check",
+        ),
+        CheckConstraint(
+            "type IN ('DAILY_CONSUMPTION_HIGH', 'MONTHLY_CONSUMPTION_HIGH', "
+            "'HOURLY_CONSUMPTION_HIGH', 'PEAK_HOUR_CONSUMPTION_HIGH', "
+            "'COST_THRESHOLD_EXCEEDED', 'MONTHLY_BUDGET_RISK', "
+            "'PROJECTED_BILL_HIGH', 'TARIFF_STEP_APPROACHING', "
+            "'NEAR_PATTERN_CONSUMPTION', 'CROSSING_PATTERN_CONSUMPTION', "
+            "'CONSUMPTION_SPIKE', 'ABNORMAL_DAILY_PATTERN', "
+            "'ABNORMAL_HOURLY_PATTERN', 'NIGHT_CONSUMPTION_ABNORMAL', "
+            "'WEEKEND_CONSUMPTION_ABNORMAL', 'BASELOAD_INCREASED', "
+            "'ZERO_CONSUMPTION_UNEXPECTED', 'SIMILAR_PREMISE_DEVIATION', "
+            "'SHIFT_LOAD_TO_OFF_PEAK', 'REDUCE_STANDBY_CONSUMPTION', "
+            "'OPTIMIZE_COOLING_USAGE', 'OPTIMIZE_HEATING_USAGE', "
+            "'POTENTIAL_DEVICE_LEFT_ON', 'BUDGET_SAVING_RECOMMENDATION', "
+            "'TARIFF_PLAN_RECOMMENDATION', 'ENERGY_EFFICIENCY_OPPORTUNITY', "
+            "'PREDICTED_HIGH_BILL_ACTION')",
+            name="alert_rules_type_check",
+        ),
+        CheckConstraint(
+            "suitable_for <@ ARRAY['FAHAM', 'POWER_METER'] AND "
+            "cardinality(suitable_for) > 0",
+            name="alert_rules_suitable_for_check",
         ),
         Index("idx_alert_rules_enabled", "enabled"),
         Index(
@@ -50,6 +72,6 @@ class AlertRule(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("30"))
-    suitable_for: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)), nullable=True)
+    suitable_for: Mapped[list[str]] = mapped_column(ARRAY(String(30)), nullable=False, server_default=text("ARRAY['FAHAM', 'POWER_METER']"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
