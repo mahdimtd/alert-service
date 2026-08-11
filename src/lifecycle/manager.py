@@ -64,7 +64,7 @@ def _audit_log(
 
 def _default_title_and_message(rule: AlertRule, value: Decimal) -> tuple[str, str]:
     """
-    this def output a message for alert ab for notification orchestrator.
+    this def output a message for alert db for notification orchestrator.
     """
     title = rule.name
     message = (
