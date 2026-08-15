@@ -8,29 +8,42 @@ from sqlalchemy.orm import Session
 from src.models.alert_audit_logs import AlertAuditLog
 from src.models.alert_rule import AlertRule
 from src.models.alerts import Alert
+from src.outbox import enqueue as enqueue_outbox_event
 from src.schemas.alert_signal import AlertSignal
 
-#har alert dar database yeki iz ina hast.ager active,acknowleded bashe nmish jadid sakht.
+# States in which an alert is still considered "open" (matches the partial
+# unique index on alerts.fingerprint in the database).
 OPEN_STATES = ("ACTIVE", "ACKNOWLEDGED", "SNOOZED")
 
-#bejaye class toy har def ye exception bezrim.
-class LifecycleError(Exception):
 
-    """inheritance from exception for specific lifecycle errors"""
+class LifecycleError(Exception):
+    """Raised when a requested lifecycle transition is not valid."""
 
 
 def build_fingerprint(premises_id: int, rule_type: str) -> str:
     """
-    building a value for identifying ongoing alert for a given premises_id
-    this is going to use for identify is this alert exist or what?!
+    Identify a single ongoing occurrence of a rule for a given premises.
+    Used to decide whether a signal belongs to an existing open alert
+    or should start a new one.
     """
     return f"{premises_id}:{rule_type}"
 
 
-def check_alert_db(db: Session, premises_id: int, fingerprint: str) -> Alert | None:
-    """
-    using for check if alert exists in db or what?!
-    """
+def _outbox_payload(alert: Alert, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
+        "alert_id": alert.id,
+        "premises_id": alert.premises_id,
+        "rule_type": alert.type,
+        "severity": alert.severity,
+        "state": alert.state,
+        "occurrence_count": alert.occurrence_count,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def get_open_alert(db: Session, premises_id: int, fingerprint: str) -> Alert | None:
     stmt = select(Alert).where(
         Alert.premises_id == premises_id,
         Alert.fingerprint == fingerprint,
@@ -39,7 +52,7 @@ def check_alert_db(db: Session, premises_id: int, fingerprint: str) -> Alert | N
     return db.execute(stmt).scalar_one_or_none()
 
 
-def _audit_log(
+def _log_event(
     db: Session,
     alert_id: int,
     event: str,
@@ -47,9 +60,7 @@ def _audit_log(
     to_state: str | None,
     actor_type: str = "SYSTEM",
     metadata: dict[str, Any] | None = None,
-    ) -> AlertAuditLog:
-    """Create an audit log entry for db table"""
-
+) -> AlertAuditLog:
     log = AlertAuditLog(
         alert_id=alert_id,
         event=event,
@@ -63,9 +74,10 @@ def _audit_log(
 
 
 def _default_title_and_message(rule: AlertRule, value: Decimal) -> tuple[str, str]:
-    """
-    this def output a message for alert db for notification orchestrator.
-    """
+    # Basic placeholder used to fill the required alerts.title/message
+    # columns. Final user-facing wording/localization belongs to the
+    # Notification Orchestrator's template selection (later step); this is
+    # just what gets stored on the alert record itself.
     title = rule.name
     message = (
         f"{rule.metric} is {value} {rule.unit}, "
@@ -93,7 +105,7 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
     fingerprint = build_fingerprint(signal.premises_id, rule.type)
     now = datetime.now(timezone.utc)
 
-    existing = check_alert_db(db, signal.premises_id, fingerprint)
+    existing = get_open_alert(db, signal.premises_id, fingerprint)
 
     if existing is None:
         title, message = _default_title_and_message(rule, signal.value)
@@ -112,7 +124,8 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
         )
         db.add(alert)
         db.flush()  # populate alert.id (Identity column) before logging
-        _audit_log(db, alert.id, "ALERT_CREATED", from_state=None, to_state="ACTIVE")
+        _log_event(db, alert.id, "ALERT_CREATED", from_state=None, to_state="ACTIVE")
+        enqueue_outbox_event(db, "ALERT", alert.id, "alert.created", _outbox_payload(alert))
         return alert, True
 
     previous_state = existing.state
@@ -129,15 +142,20 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
     if was_snoozed:
         existing.state = "ACTIVE"
         existing.snoozed_until = None
-        _audit_log(
+        _log_event(
             db, existing.id, "ALERT_REACTIVATED",
             from_state=previous_state, to_state="ACTIVE",
         )
+        enqueue_outbox_event(
+            db, "ALERT", existing.id, "alert.reactivated",
+            _outbox_payload(existing, {"from_state": previous_state}),
+        )
     else:
-        _audit_log(
+        _log_event(
             db, existing.id, "ALERT_UPDATED",
             from_state=previous_state, to_state=previous_state,
         )
+        enqueue_outbox_event(db, "ALERT", existing.id, "alert.updated", _outbox_payload(existing))
 
     should_notify = was_snoozed or not within_cooldown
     return existing, should_notify
@@ -151,7 +169,7 @@ def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None
     for something that was never alerted on).
     """
     fingerprint = build_fingerprint(premises_id, rule_type)
-    alert = check_alert_db(db, premises_id, fingerprint)
+    alert = get_open_alert(db, premises_id, fingerprint)
     if alert is None:
         return None
 
@@ -159,9 +177,13 @@ def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None
     alert.state = "RESOLVED"
     alert.resolved_at = datetime.now(timezone.utc)
 
-    _audit_log(
+    _log_event(
         db, alert.id, "ALERT_RESOLVED",
         from_state=previous_state, to_state="RESOLVED",
+    )
+    enqueue_outbox_event(
+        db, "ALERT", alert.id, "alert.resolved",
+        _outbox_payload(alert, {"from_state": previous_state}),
     )
     return alert
 
@@ -181,9 +203,13 @@ def acknowledge_alert(db: Session, alert_id: int, actor_type: str = "USER") -> A
     alert.acknowledged_at = datetime.now(timezone.utc)
     alert.snoozed_until = None
 
-    _audit_log(
+    _log_event(
         db, alert.id, "ALERT_ACKNOWLEDGED",
         from_state=previous_state, to_state="ACKNOWLEDGED", actor_type=actor_type,
+    )
+    enqueue_outbox_event(
+        db, "ALERT", alert.id, "alert.acknowledged",
+        _outbox_payload(alert, {"from_state": previous_state}),
     )
     return alert
 
@@ -204,8 +230,12 @@ def snooze_alert(
     alert.state = "SNOOZED"
     alert.snoozed_until = until
 
-    _audit_log(
+    _log_event(
         db, alert.id, "ALERT_SNOOZED",
         from_state=previous_state, to_state="SNOOZED", actor_type=actor_type,
+    )
+    enqueue_outbox_event(
+        db, "ALERT", alert.id, "alert.snoozed",
+        _outbox_payload(alert, {"from_state": previous_state, "snoozed_until": until.isoformat()}),
     )
     return alert

@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from sqlalchemy.orm import Mapped,mapped_column
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import Integer,text,Boolean,String,Identity,Index,Numeric,Time,CheckConstraint,DateTime,ForeignKey,Text
@@ -42,8 +43,8 @@ class Alert(Base):
     state : Mapped[str] = mapped_column(String(20),nullable=False,server_default=text("'ACTIVE'"))
     title : Mapped[str] = mapped_column(String(200),nullable=False)
     message : Mapped[str] = mapped_column(Text,nullable=False)
-    current_value : Mapped[float | None] = mapped_column(Numeric(14,4),nullable=True)
-    threshold_value : Mapped[float | None] = mapped_column(Numeric(14,4),nullable=True)
+    current_value : Mapped[Decimal | None] = mapped_column(Numeric(14,4),nullable=True)
+    threshold_value : Mapped[Decimal | None] = mapped_column(Numeric(14,4),nullable=True)
     unit : Mapped[str | None] = mapped_column(String(20),nullable=True)
     fingerprint : Mapped[str] = mapped_column(String(255),nullable=False)
     occurrence_count : Mapped[int] = mapped_column(Integer,nullable=False,server_default=text("1"))
@@ -54,4 +55,3 @@ class Alert(Base):
     resolved_at : Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
     created_at : Mapped[datetime] = mapped_column(DateTime(timezone=True),nullable=False,server_default=text("now()"))
     updated_at : Mapped[datetime] = mapped_column(DateTime(timezone=True),nullable=False,server_default=text("now()"))
-    

@@ -8,8 +8,65 @@ from src.models.alert_audit_logs import AlertAuditLog
 from src.models.alert_notifications import AlertNotifications
 from src.models.alerts import Alert
 from src.models.notification_preferences import NotificationPreferences
+from src.outbox import enqueue as enqueue_outbox_event
 
 SEVERITY_ORDER = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+
+# Maps each alert_rules.type to the notification_preferences category
+# toggle that governs it. Derived directly from the three categories
+# defined in the spec (3.1 usage/cost, 3.2 behavioral/anomaly,
+# 3.3 recommendation-driven) -- the 27 rule types split cleanly across
+# them. No rule type currently maps to "system" (no such category exists
+# in alert_rules.type yet); that flag stays unused until one does.
+RULE_TYPE_CATEGORY = {
+    # 3.1 Usage & cost alerts -> usage_alerts_enabled
+    "DAILY_CONSUMPTION_HIGH": "usage",
+    "MONTHLY_CONSUMPTION_HIGH": "usage",
+    "HOURLY_CONSUMPTION_HIGH": "usage",
+    "PEAK_HOUR_CONSUMPTION_HIGH": "usage",
+    "COST_THRESHOLD_EXCEEDED": "usage",
+    "MONTHLY_BUDGET_RISK": "usage",
+    "PROJECTED_BILL_HIGH": "usage",
+    "TARIFF_STEP_APPROACHING": "usage",
+    # 3.2 Behavioral / anomaly alerts -> anomaly_alerts_enabled
+    "NEAR_PATTERN_CONSUMPTION": "anomaly",
+    "CROSSING_PATTERN_CONSUMPTION": "anomaly",
+    "CONSUMPTION_SPIKE": "anomaly",
+    "ABNORMAL_DAILY_PATTERN": "anomaly",
+    "ABNORMAL_HOURLY_PATTERN": "anomaly",
+    "NIGHT_CONSUMPTION_ABNORMAL": "anomaly",
+    "WEEKEND_CONSUMPTION_ABNORMAL": "anomaly",
+    "BASELOAD_INCREASED": "anomaly",
+    "ZERO_CONSUMPTION_UNEXPECTED": "anomaly",
+    "SIMILAR_PREMISE_DEVIATION": "anomaly",
+    # 3.3 Smart / recommendation-driven alerts -> recommendation_alerts_enabled
+    "SHIFT_LOAD_TO_OFF_PEAK": "recommendation",
+    "REDUCE_STANDBY_CONSUMPTION": "recommendation",
+    "OPTIMIZE_COOLING_USAGE": "recommendation",
+    "OPTIMIZE_HEATING_USAGE": "recommendation",
+    "POTENTIAL_DEVICE_LEFT_ON": "recommendation",
+    "BUDGET_SAVING_RECOMMENDATION": "recommendation",
+    "TARIFF_PLAN_RECOMMENDATION": "recommendation",
+    "ENERGY_EFFICIENCY_OPPORTUNITY": "recommendation",
+    "PREDICTED_HIGH_BILL_ACTION": "recommendation",
+}
+
+_CATEGORY_ENABLED_ATTR = {
+    "usage": "usage_alerts_enabled",
+    "anomaly": "anomaly_alerts_enabled",
+    "recommendation": "recommendation_alerts_enabled",
+    "system": "system_alerts_enabled",
+}
+
+
+def category_enabled(prefs: NotificationPreferences, rule_type: str) -> bool:
+    category = RULE_TYPE_CATEGORY.get(rule_type)
+    if category is None:
+        # Unknown/unmapped type: fail open rather than silently swallowing
+        # an alert the user might need to see. Should not happen once
+        # every type in alert_rules.type is mapped above.
+        return True
+    return getattr(prefs, _CATEGORY_ENABLED_ATTR[category])
 
 # Severities that are allowed to bypass quiet hours. Not specified in the
 # document beyond "low-importance notifications are postponed"; CRITICAL
@@ -39,20 +96,12 @@ def is_quiet_hours(prefs: NotificationPreferences, now_utc: datetime) -> bool:
 
 
 def select_channels(
-    prefs: NotificationPreferences, severity: str, now_utc: datetime
+    prefs: NotificationPreferences, severity: str, rule_type: str, now_utc: datetime
 ) -> list[str]:
-    """
-    Decide which channels an alert of this severity should go out on,
-    right now, given the current preferences.
-
-    NOTE: this does not yet filter by alert category (usage_alerts_enabled,
-    anomaly_alerts_enabled, recommendation_alerts_enabled,
-    system_alerts_enabled). Doing that needs a mapping from alert_rules.type
-    to one of those four categories, which isn't defined anywhere in the
-    schema yet -- worth deciding explicitly rather than guessing it from
-    the type name.
-    """
+    """Decide which channels an alert of this severity/category should go out on, right now."""
     if not prefs.notifications_enabled:
+        return []
+    if not category_enabled(prefs, rule_type):
         return []
     if SEVERITY_ORDER[severity] < SEVERITY_ORDER[prefs.minimum_severity]:
         return []
@@ -100,7 +149,7 @@ def create_notifications(db: Session, alert: Alert) -> list[AlertNotifications]:
     """
     prefs = get_preferences(db)
     now = datetime.now(timezone.utc)
-    channels = select_channels(prefs, alert.severity, now)
+    channels = select_channels(prefs, alert.severity, alert.type, now)
 
     created: list[AlertNotifications] = []
 
@@ -137,5 +186,16 @@ def create_notifications(db: Session, alert: Alert) -> list[AlertNotifications]:
                     "notification_id": notification.id,
                 },
             ))
+            enqueue_outbox_event(
+                db, "NOTIFICATION", notification.id, "notification.requested",
+                {
+                    "notification_id": notification.id,
+                    "alert_id": alert.id,
+                    "premises_id": alert.premises_id,
+                    "channel": notification.channel,
+                    "severity": alert.severity,
+                    "idempotency_key": notification.idempotency_key,
+                },
+            )
 
     return created
