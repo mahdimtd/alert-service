@@ -38,10 +38,10 @@ class NotificationOut(BaseModel):
     status: str
 
 
-class ReadingResultOut(BaseModel):
+class DetectionOutcomeOut(BaseModel):
     rule_type: str
+    condition_key: str
     condition_met: bool
-    alert_id: int
-    state: str
-    should_notify: bool | None = None
-    notifications: list[NotificationOut] = []
+    status: str
+    event_type: str | None = None
+    condition_instance_id: str

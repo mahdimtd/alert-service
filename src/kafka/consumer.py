@@ -7,9 +7,6 @@ from aiokafka import AIOKafkaConsumer
 from src.config import settings
 from src.database import SessionLocal
 from src.detection.engine import process_reading
-from src.lifecycle.manager import LifecycleError
-from src.models.alerts import Alert
-from src.orchestrator.superviser import create_notifications
 from src.schemas.input_message import MeterReading
 
 logger = logging.getLogger(__name__)
@@ -25,15 +22,8 @@ async def handle_message(raw_value: bytes) -> None:
 
     db = SessionLocal()
     try:
-        outcomes = process_reading(db, reading)
-        for outcome in outcomes:
-            if outcome.get("condition_met") and outcome.get("should_notify"):
-                alert = db.get(Alert, outcome["alert_id"])
-                create_notifications(db, alert)
+        process_reading(db, reading)
         db.commit()
-    except LifecycleError:
-        db.rollback()
-        logger.exception("Lifecycle error processing reading: %s", reading)
     except Exception:
         db.rollback()
         raise
@@ -43,22 +33,29 @@ async def handle_message(raw_value: bytes) -> None:
 
 async def run_consumer() -> None:
     """
-    Long-running loop: read meter readings off Kafka and push them
-    through Detection -> Lifecycle -> Orchestrator. Runs as its own
-    process, separate from the FastAPI app:
+    Long-running loop: read meter readings off Kafka and run them
+    through the Detection Engine only. Runs as its own process:
 
         python -m src.kafka.consumer
+
+    This process never touches the Lifecycle Manager or alert.alerts --
+    it only decides, per rule, whether a condition just started or just
+    stopped, and records that as a row in detection.outbox_events. See
+    src/kafka/detection_relay.py (publishes those rows to Kafka) and
+    src/kafka/condition_consumer.py (turns them into alerts) for the
+    rest of the pipeline.
 
     NOTE on delivery semantics: offsets are committed only after a
     message is fully processed and its db transaction is committed
     (enable_auto_commit=False). That gives at-least-once delivery -- if
     the process crashes after the db commit but before the Kafka offset
-    commit, the same reading is replayed. Nothing in process_reading /
-    process_signal currently de-duplicates a replayed reading (there's
-    no idempotency key on the message itself); it would just be counted
-    as another occurrence, which is a bit off but not wrong in a
-    dangerous way. Add a message-level idempotency key if this turns
-    out to matter.
+    commit, the same reading is replayed. process_reading has no
+    message-level idempotency key, so a replayed reading is evaluated
+    again; since only genuine INACTIVE/CLEARED -> ACTIVE or
+    ACTIVE -> CLEARED transitions produce an outbox event, a replay that
+    lands on an already-ACTIVE (or already not-active) condition is a
+    harmless no-op event-wise. Add a message-level idempotency key if
+    this turns out to matter for the bookkeeping columns too.
     """
     consumer = AIOKafkaConsumer(
         settings.METER_READINGS_TOPIC,

@@ -21,7 +21,9 @@ def main():
               f"operator={rule.operator}, threshold={rule.threshold} {rule.unit}, "
               f"meter_type={meter_type})\n")
 
-        # 1) Reading above threshold -> should create an alert
+        # 1) Reading above threshold -> condition_states row goes
+        #    INACTIVE/CLEARED -> ACTIVE; a ConditionDetected row is
+        #    written to detection.outbox_events.
         high_reading = MeterReading(
             premises_id=FAKE_PREMISES_ID,
             meter_type=meter_type,
@@ -32,12 +34,14 @@ def main():
         db.commit()
         print(f"[1] reading={high_reading.value} -> {outcomes}")
 
-        # 2) Same high reading again -> should update existing alert, likely within cooldown
+        # 2) Same high reading again -> condition stays ACTIVE, no new event.
         outcomes2 = process_reading(db, high_reading)
         db.commit()
         print(f"[2] reading={high_reading.value} -> {outcomes2}")
 
-        # 3) Reading back to normal -> should resolve the alert
+        # 3) Reading back to normal -> condition_states row goes
+        #    ACTIVE -> CLEARED; a ConditionCleared row is written to
+        #    detection.outbox_events.
         normal_reading = MeterReading(
             premises_id=FAKE_PREMISES_ID,
             meter_type=meter_type,
@@ -48,7 +52,13 @@ def main():
         db.commit()
         print(f"[3] reading={normal_reading.value} -> {outcomes3}")
 
-        print("\nDone.")
+        print(
+            "\nDone. So far these rows only exist in "
+            "detection.condition_states / detection.outbox_events. Run "
+            "`python -m src.kafka.detection_relay` and "
+            "`python -m src.kafka.condition_consumer` alongside this to "
+            "see them turn into an actual alert.alerts row."
+        )
 
     except Exception as e:
         db.rollback()
