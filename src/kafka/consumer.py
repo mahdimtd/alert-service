@@ -20,8 +20,6 @@ async def handle_message(raw_value: bytes) -> None:
         data = json.loads(raw_value)
         reading = MeterReading(**data)
     except Exception:
-        # Poison message: log and move on. No dead-letter topic yet --
-        # worth adding if bad messages turn out to be a real problem.
         logger.exception("Skipping unparseable meter reading message")
         return
 
