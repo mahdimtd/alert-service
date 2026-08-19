@@ -23,6 +23,7 @@ async def handle_message(raw_value: bytes) -> None:
     except Exception:
         logger.exception("Skipping unparseable condition event message")
         return
+    logger.debug("Processing condition event: type=%s premises=%s rule=%s", event_type, payload.get("premises_id"), payload.get("alert_rule_id"))
 
     db = SessionLocal()
     try:
@@ -82,14 +83,23 @@ async def run_consumer() -> None:
         auto_offset_reset="earliest",
     )
     await consumer.start()
+    logger.info("Lifecycle Manager consumer started on topic %s", settings.CONDITION_EVENTS_TOPIC)
     try:
         async for msg in consumer:
+            logger.debug("Received message from partition %d offset %d", msg.partition, msg.offset)
             await handle_message(msg.value)
             await consumer.commit()
     finally:
         await consumer.stop()
+        logger.info("Lifecycle Manager consumer stopped")
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s'
+    )
+    logging.getLogger("aiokafka").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logger.setLevel(logging.DEBUG)
     asyncio.run(run_consumer())

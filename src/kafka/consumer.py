@@ -7,7 +7,7 @@ from aiokafka import AIOKafkaConsumer
 from src.config import settings
 from src.database import SessionLocal
 from src.detection.engine import process_reading
-from src.schemas.input_message import MeterReading
+from src.schemas.input_message import EnergyReading
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +15,11 @@ logger = logging.getLogger(__name__)
 async def handle_message(raw_value: bytes) -> None:
     try:
         data = json.loads(raw_value)
-        reading = MeterReading(**data)
+        reading = EnergyReading(**data)
     except Exception:
         logger.exception("Skipping unparseable meter reading message")
         return
+    logger.debug("Processing reading: premises=%s meter=%s value=%s", reading.premises_id, reading.meter_id, reading.value)
 
     db = SessionLocal()
     try:
@@ -65,14 +66,23 @@ async def run_consumer() -> None:
         auto_offset_reset="earliest",
     )
     await consumer.start()
+    logger.info("Detection Engine consumer started on topic %s", settings.METER_READINGS_TOPIC)
     try:
         async for msg in consumer:
+            logger.debug("Received message from partition %d offset %d", msg.partition, msg.offset)
             await handle_message(msg.value)
             await consumer.commit()
     finally:
         await consumer.stop()
+        logger.info("Detection Engine consumer stopped")
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s'
+    )
+    logging.getLogger("aiokafka").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logger.setLevel(logging.DEBUG)
     asyncio.run(run_consumer())

@@ -37,6 +37,7 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             .limit(BATCH_SIZE)
         )
         events = db.execute(stmt).scalars().all()
+        logger.debug("Polled outbox: found %d events", len(events))
         if not events:
             return 0
 
@@ -49,7 +50,7 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
                 "aggregate_id": str(event.aggregate_id),
                 "premises_id": event.premises_id,
                 "rule_id": str(event.rule_id),
-                "condition_key": event.condition_key,
+                "condition_key": event.payload.get("condition_key"),
                 "payload": event.payload,
                 "created_at": event.created_at.isoformat(),
             }
@@ -80,6 +81,7 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             sent += 1
 
         db.commit()
+        logger.info("Published %d events to Kafka", sent)
         return sent
     except Exception:
         db.rollback()
@@ -106,15 +108,24 @@ async def run_relay() -> None:
     """
     producer = AIOKafkaProducer(bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS)
     await producer.start()
+    logger.info("Detection relay started, polling every %ds", settings.DETECTION_OUTBOX_POLL_INTERVAL_SECONDS)
     try:
         while True:
             sent = await relay_once(producer)
             if sent == 0:
+                logger.debug("No pending events, sleeping %ds", settings.DETECTION_OUTBOX_POLL_INTERVAL_SECONDS)
                 await asyncio.sleep(settings.DETECTION_OUTBOX_POLL_INTERVAL_SECONDS)
     finally:
         await producer.stop()
+        logger.info("Detection relay stopped")
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s'
+    )
+    logging.getLogger("aiokafka").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logger.setLevel(logging.DEBUG)
     asyncio.run(run_relay())

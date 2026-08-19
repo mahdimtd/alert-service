@@ -26,6 +26,7 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             .limit(BATCH_SIZE)
         )
         events = db.execute(stmt).scalars().all()
+        logger.debug("Polled outbox: found %d events", len(events))
         if not events:
             return 0
 
@@ -47,6 +48,7 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             event.published_at = datetime.now(timezone.utc)
 
         db.commit()
+        logger.info("Published %d events to Kafka", len(events))
         return len(events)
     except Exception:
         db.rollback()
@@ -73,15 +75,24 @@ async def run_relay() -> None:
     """
     producer = AIOKafkaProducer(bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS)
     await producer.start()
+    logger.info("Alert relay started, polling every %ds", settings.OUTBOX_POLL_INTERVAL_SECONDS)
     try:
         while True:
             sent = await relay_once(producer)
             if sent == 0:
+                logger.debug("No pending events, sleeping %ds", settings.OUTBOX_POLL_INTERVAL_SECONDS)
                 await asyncio.sleep(settings.OUTBOX_POLL_INTERVAL_SECONDS)
     finally:
         await producer.stop()
+        logger.info("Alert relay stopped")
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s'
+    )
+    logging.getLogger("aiokafka").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logger.setLevel(logging.DEBUG)
     asyncio.run(run_relay())

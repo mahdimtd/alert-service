@@ -30,7 +30,6 @@ def enqueue_condition_event(
         aggregate_id=state.condition_instance_id,
         premises_id=state.premises_id,
         rule_id=state.rule_id,
-        condition_key=state.condition_key,
         event_type=event_type,
         topic=settings.CONDITION_EVENTS_TOPIC,
         partition_key=str(state.premises_id),

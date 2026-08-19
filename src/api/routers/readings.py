@@ -4,13 +4,13 @@ from sqlalchemy.orm import Session
 from src.api.schemas import DetectionOutcomeOut
 from src.database import get_db
 from src.detection.engine import process_reading
-from src.schemas.input_message import MeterReading
+from src.schemas.input_message import EnergyReading
 
 router = APIRouter(prefix="/readings", tags=["readings"])
 
 
 @router.post("", response_model=list[DetectionOutcomeOut])
-def submit_reading(reading: MeterReading, db: Session = Depends(get_db)):
+def submit_reading(reading: EnergyReading, db: Session = Depends(get_db)):
     """
     Feed one meter reading through the Detection Engine only, and commit
     whatever local condition-state change resulted from it (and, if a

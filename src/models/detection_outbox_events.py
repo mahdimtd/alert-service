@@ -52,7 +52,6 @@ class DetectionOutboxEvent(Base):
     aggregate_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     premises_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     rule_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    condition_key: Mapped[str] = mapped_column(String(255), nullable=False)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     topic: Mapped[str] = mapped_column(String(100), nullable=False)
     partition_key: Mapped[str] = mapped_column(String(255), nullable=False)
