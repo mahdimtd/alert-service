@@ -31,6 +31,7 @@ async def handle_message(raw_value: bytes) -> None:
                 premises_id=payload["premises_id"],
                 rule_id=payload["alert_rule_id"],
                 value=Decimal(payload["value"]),
+                threshold=Decimal(payload["threshold"]),
             )
             alert, should_notify = lifecycle.process_signal(db, signal)
             if should_notify:
@@ -51,7 +52,6 @@ async def handle_message(raw_value: bytes) -> None:
         raise
     finally:
         db.close()
-
 
 async def run_consumer() -> None:
     """

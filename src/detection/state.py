@@ -1,20 +1,3 @@
-"""
-Local, per-condition state tracking for the Detection Engine.
-
-This replaces what the engine used to do by calling into the Lifecycle
-Manager directly for every reading:
-  - deciding whether a reading represents a NEW occurrence of a condition
-    (INACTIVE/CLEARED -> ACTIVE), or the condition simply staying active,
-  - deciding whether a condition that used to be met has just stopped
-    being met (ACTIVE -> CLEARED).
-
-State lives entirely in detection.condition_states, which is owned by
-the Detection domain and never joined against alert.alerts. Only a
-genuine transition ("just started" or "just stopped") produces work for
-anyone downstream -- readings that repeat an already-ACTIVE (or already
-not-active) condition just update this row's bookkeeping columns and
-produce no event and no alert.alerts lookup at all.
-"""
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -83,15 +66,9 @@ def apply_reading(
     premises_id: int,
     value: Decimal,
     condition_met: bool,
+    threshold: Decimal,
     condition_key: str = THRESHOLD_BREACH_CONDITION_KEY,
 ) -> ConditionTransition:
-    """
-    Evaluate one reading against the local condition state for
-    (premises_id, rule, condition_key) and update it in place. Returns
-    the resulting row plus which transition (if any) just happened.
-    Caller is responsible for enqueueing an outbox event when
-    transitioned is True, and for committing.
-    """
     rid = rule_uuid(rule.id)
     now = datetime.now(timezone.utc)
 
@@ -112,7 +89,7 @@ def apply_reading(
 
     row.last_observed_at = now
     row.last_value = value
-    row.threshold_value = rule.threshold
+    row.threshold_value = threshold  # was rule.threshold
     row.version = (row.version or 0) + 1
 
     if condition_met and not was_active:
@@ -125,8 +102,6 @@ def apply_reading(
         row.status = CLEARED
         row.cleared_at = now
         event_type = CONDITION_CLEARED
-    # else: condition_met == was_active already -> no transition, just
-    # the bookkeeping updates above.
 
-    db.flush()  # settle server-generated defaults (condition_instance_id on first insert)
+    db.flush()
     return ConditionTransition(state=row, event_type=event_type)

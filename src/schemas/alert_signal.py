@@ -10,3 +10,4 @@ class AlertSignal(BaseModel):
     premises_id: int
     rule_id: int
     value: Decimal
+    threshold: Decimal
