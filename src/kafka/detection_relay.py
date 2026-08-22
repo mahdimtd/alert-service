@@ -12,7 +12,7 @@ from src.models.detection_outbox_events import DetectionOutboxEvent
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 100
+BATCH_SIZE = settings.DETECTION_RELAY_BATCH_SIZE
 
 
 def _backoff_seconds(attempt_count: int) -> int:
@@ -41,7 +41,9 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
         if not events:
             return 0
 
-        sent = 0
+        # Fire all publishes concurrently; aiokafka coalesces them into
+        # producer-side batches per partition.
+        futures = []
         for event in events:
             message = {
                 "event_id": str(event.event_id),
@@ -53,23 +55,33 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
                 "payload": event.payload,
                 "created_at": event.created_at.isoformat(),
             }
-            try:
-                await producer.send_and_wait(
+            futures.append((
+                event,
+                producer.send(
                     event.topic,
                     key=event.partition_key.encode(),
                     value=json.dumps(message).encode(),
-                )
-            except Exception as exc:
+                ),
+            ))
+
+        results = await asyncio.gather(*(fut for _, fut in futures), return_exceptions=True)
+
+        sent = failed = 0
+        for (event, _), result in zip(futures, results):
+            if isinstance(result, BaseException):
                 event.attempt_count += 1
                 event.status = "FAILED"
-                event.error_message = str(exc)[:2000]
-                event.next_retry_at = now + timedelta(seconds=_backoff_seconds(event.attempt_count))
+                event.error_message = str(result)[:2000]
+                event.next_retry_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=_backoff_seconds(event.attempt_count)
+                )
                 if event.attempt_count >= settings.DETECTION_OUTBOX_MAX_ATTEMPTS:
                     logger.error(
                         "Detection outbox event %s exceeded max attempts (%s); "
                         "left as FAILED for manual review",
                         event.id, settings.DETECTION_OUTBOX_MAX_ATTEMPTS,
                     )
+                failed += 1
                 continue
 
             event.status = "PUBLISHED"
@@ -80,7 +92,10 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             sent += 1
 
         db.commit()
-        logger.info("Published %d events to Kafka", sent)
+        if failed:
+            logger.warning("Published %d/%d events (%d failed -> retry scheduled)", sent, len(events), failed)
+        else:
+            logger.info("Published %d events to Kafka", sent)
         return sent
     except Exception:
         db.rollback()

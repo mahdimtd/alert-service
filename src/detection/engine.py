@@ -56,9 +56,10 @@ def _event_payload(
     }
 
 
-def process_reading(db: Session, reading: EnergyReading) -> list[dict]:
+def process_reading(db: Session, reading: EnergyReading, rules: list[AlertRule] | None = None) -> list[dict]:
     outcomes: list[dict] = []
-    rules = find_matching_rules(db)
+    if rules is None:
+        rules = find_matching_rules(db)
 
     for rule in rules:
         extractor = METRIC_EXTRACTORS.get(rule.metric)

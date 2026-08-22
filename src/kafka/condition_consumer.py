@@ -13,66 +13,81 @@ from src.schemas.alert_signal import AlertSignal
 
 logger = logging.getLogger(__name__)
 
+BATCH_SIZE = settings.LIFECYCLE_BATCH_SIZE
+POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS
+HEARTBEAT_INTERVAL_SECONDS = settings.HEARTBEAT_INTERVAL_SECONDS
 
-async def handle_message(raw_value: bytes) -> None:
-    try:
-        message = json.loads(raw_value)
-        event_type = message["event_type"]
-        payload = message["payload"]
-    except Exception:
-        logger.exception("Skipping unparseable condition event message")
-        return
-    logger.debug("Processing condition event: type=%s premises=%s rule=%s", event_type, payload.get("premises_id"), payload.get("alert_rule_id"))
+
+async def handle_batch(raw_values: list[bytes]) -> int:
+    """
+    Process a batch of ConditionDetected/ConditionCleared events in ONE db
+    transaction. Each event runs inside its own SAVEPOINT, so one bad event
+    (e.g. unknown rule) rolls back only itself and the rest of the batch
+    still commits. Returns how many events were processed successfully.
+    """
+    events = []
+    for raw in raw_values:
+        try:
+            message = json.loads(raw)
+            events.append((message["event_type"], message["payload"]))
+        except Exception:
+            logger.exception("Skipping unparseable condition event message")
+    if not events:
+        return 0
 
     db = SessionLocal()
+    processed = 0
     try:
-        if event_type == CONDITION_DETECTED:
-            signal = AlertSignal(
-                premises_id=payload["premises_id"],
-                rule_id=payload["alert_rule_id"],
-                value=Decimal(payload["value"]),
-                threshold=Decimal(payload["threshold"]),
-            )
-            # process_signal enqueues notification.requested itself (same
-            # transaction) whenever the cooldown/snooze policy says so.
-            lifecycle.process_signal(db, signal)
-
-        elif event_type == CONDITION_CLEARED:
-            lifecycle.resolve_alert(db, payload["premises_id"], payload["rule_type"])
-
-        else:
-            logger.warning("Ignoring unknown condition event type: %s", event_type)
-
+        for event_type, payload in events:
+            try:
+                with db.begin_nested():  # SAVEPOINT: isolate this event
+                    if event_type == CONDITION_DETECTED:
+                        signal = AlertSignal(
+                            premises_id=payload["premises_id"],
+                            rule_id=payload["alert_rule_id"],
+                            value=Decimal(payload["value"]),
+                            threshold=Decimal(payload["threshold"]),
+                        )
+                        # process_signal enqueues notification.requested itself
+                        # (same transaction) whenever policy says notify.
+                        lifecycle.process_signal(db, signal)
+                    elif event_type == CONDITION_CLEARED:
+                        lifecycle.resolve_alert(db, payload["premises_id"], payload["rule_type"])
+                    else:
+                        logger.warning("Ignoring unknown condition event type: %s", event_type)
+                processed += 1
+            except lifecycle.LifecycleError:
+                logger.exception("Lifecycle error processing condition event (type=%s)", event_type)
         db.commit()
-    except lifecycle.LifecycleError:
-        db.rollback()
-        logger.exception("Lifecycle error processing condition event: %s", message)
+        return processed
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
 
+
+async def _heartbeat(stats: dict, interval_seconds: int = HEARTBEAT_INTERVAL_SECONDS) -> None:
+    """Periodic liveness line so idle/high-latency periods are visible at INFO."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        logger.info(
+            "alive: batches=%d events=%d last_partition=%s last_offset=%s",
+            stats["batches"], stats["events"],
+            stats.get("last_partition"), stats.get("last_offset"),
+        )
+
+
 async def run_consumer() -> None:
     """
-    Long-running loop: read ConditionDetected/ConditionCleared events off
-    Kafka (produced by src/kafka/detection_relay.py from
-    detection.outbox_events) and drive the Lifecycle Manager, then the
-    Notification Orchestrator, from them. Runs as its own process:
+    Long-running loop: pull batches of condition events off Kafka and drive
+    the Lifecycle Manager from them. Runs as its own process:
 
         python -m src.kafka.condition_consumer
 
-    This is the ONLY place that turns a detected condition into an
-    alert.alerts row. The Detection Engine never calls the Lifecycle
-    Manager directly and never touches alert.alerts -- it only produces
-    the events this process consumes.
-
-    NOTE on delivery semantics: same at-least-once caveat as
-    src/kafka/consumer.py. A replayed ConditionDetected calls
-    process_signal again (counted as another occurrence, same behavior
-    as the old in-process call). A replayed ConditionCleared calls
-    resolve_alert again, which is a safe no-op if the alert is already
-    RESOLVED.
+    Offsets are committed only after the batch's db transaction commits
+    (at-least-once). Replays are safe: process_signal counts another
+    occurrence and resolve_alert is a no-op on already-RESOLVED alerts.
     """
     consumer = AIOKafkaConsumer(
         settings.CONDITION_EVENTS_TOPIC,
@@ -80,15 +95,30 @@ async def run_consumer() -> None:
         group_id=settings.LIFECYCLE_KAFKA_CONSUMER_GROUP,
         enable_auto_commit=False,
         auto_offset_reset="earliest",
+        max_poll_records=BATCH_SIZE,
     )
     await consumer.start()
-    logger.info("Lifecycle Manager consumer started on topic %s", settings.CONDITION_EVENTS_TOPIC)
+    logger.info("Lifecycle Manager consumer started on topic %s (batch=%d)", settings.CONDITION_EVENTS_TOPIC, BATCH_SIZE)
+
+    stats: dict = {"batches": 0, "events": 0}
+    heartbeat = asyncio.create_task(_heartbeat(stats))
     try:
-        async for msg in consumer:
-            logger.debug("Received message from partition %d offset %d", msg.partition, msg.offset)
-            await handle_message(msg.value)
+        while True:
+            results = await consumer.getmany(timeout_ms=POLL_TIMEOUT_MS, max_records=BATCH_SIZE)
+            messages = [msg for messages in results.values() for msg in messages]
+            if not messages:
+                continue
+
+            await handle_batch([msg.value for msg in messages])
             await consumer.commit()
+
+            last = messages[-1]
+            stats["batches"] += 1
+            stats["events"] += len(messages)
+            stats["last_partition"] = last.partition
+            stats["last_offset"] = last.offset
     finally:
+        heartbeat.cancel()
         await consumer.stop()
         logger.info("Lifecycle Manager consumer stopped")
 

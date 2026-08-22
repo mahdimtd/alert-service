@@ -16,4 +16,12 @@ class Settings(BaseSettings):
     DETECTION_OUTBOX_MAX_ATTEMPTS : int = 10
     DETECTION_OUTBOX_BASE_BACKOFF_SECONDS : int = 5
 
+    # Batching / polling tuning (override from .env anytime)
+    CONSUMER_BATCH_SIZE : int = 500            # readings per detection batch
+    LIFECYCLE_BATCH_SIZE : int = 500           # condition events per lifecycle batch
+    RELAY_BATCH_SIZE : int = 500               # alert outbox rows per relay pass
+    DETECTION_RELAY_BATCH_SIZE : int = 500     # detection outbox rows per relay pass
+    KAFKA_POLL_TIMEOUT_MS : int = 1000         # getmany wait when topic is empty
+    HEARTBEAT_INTERVAL_SECONDS : int = 60      # consumers' periodic liveness log
+
 settings = Settings()

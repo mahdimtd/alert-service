@@ -6,31 +6,42 @@ from aiokafka import AIOKafkaConsumer
 
 from src.config import settings
 from src.database import SessionLocal
-from src.detection.engine import process_reading
+from src.detection.engine import find_matching_rules, process_reading
 from src.schemas.input_message import EnergyReading
 
 logger = logging.getLogger(__name__)
 
+BATCH_SIZE = settings.CONSUMER_BATCH_SIZE
+POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS
+HEARTBEAT_INTERVAL_SECONDS = settings.HEARTBEAT_INTERVAL_SECONDS
 
-async def handle_message(raw_value: bytes) -> None:
-    try:
-        data = json.loads(raw_value)
-        reading = EnergyReading(**data)
-    except Exception:
-        logger.exception("Skipping unparseable meter reading message")
-        return
-    logger.debug(
-        "Processing reading: premises=%s meter=%s measured_at=%s total_kwh_period=%s",
-        reading.premises_id,
-        reading.meter_type,
-        reading.measured_at,
-        reading.total_kwh_period,
-    )
+
+async def handle_batch(raw_values: list[bytes]) -> int:
+    """
+    Parse and evaluate a whole batch of readings inside ONE db transaction.
+    Rules are loaded once per batch (not per reading). Returns how many
+    readings were processed.
+    """
+    readings = []
+    for raw in raw_values:
+        try:
+            readings.append(EnergyReading(**json.loads(raw)))
+        except Exception:
+            logger.exception("Skipping unparseable meter reading")
+    if not readings:
+        return 0
 
     db = SessionLocal()
     try:
-        process_reading(db, reading)
+        rules = find_matching_rules(db)
+        for reading in readings:
+            logger.debug(
+                "Processing reading: premises=%s meter=%s total_kwh_period=%s",
+                reading.premises_id, reading.meter_type, reading.total_kwh_period,
+            )
+            process_reading(db, reading, rules=rules)
         db.commit()
+        return len(readings)
     except Exception:
         db.rollback()
         raise
@@ -38,31 +49,25 @@ async def handle_message(raw_value: bytes) -> None:
         db.close()
 
 
+async def _heartbeat(stats: dict, interval_seconds: int = HEARTBEAT_INTERVAL_SECONDS) -> None:
+    """Periodic liveness line so idle/high-latency periods are visible at INFO."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        logger.info(
+            "alive: batches=%d readings=%d last_partition=%s last_offset=%s",
+            stats["batches"], stats["readings"],
+            stats.get("last_partition"), stats.get("last_offset"),
+        )
+
+
 async def run_consumer() -> None:
     """
-    Long-running loop: read meter readings off Kafka and run them
-    through the Detection Engine only. Runs as its own process:
+    Long-running loop: pull batches of meter readings off Kafka and run them
+    through the Detection Engine. Each batch is evaluated in a single db
+    transaction; Kafka offsets are committed only after that transaction
+    commits (at-least-once). Runs as its own process:
 
         python -m src.kafka.consumer
-
-    This process never touches the Lifecycle Manager or alert.alerts --
-    it only decides, per rule, whether a condition just started or just
-    stopped, and records that as a row in detection.outbox_events. See
-    src/kafka/detection_relay.py (publishes those rows to Kafka) and
-    src/kafka/condition_consumer.py (turns them into alerts) for the
-    rest of the pipeline.
-
-    NOTE on delivery semantics: offsets are committed only after a
-    message is fully processed and its db transaction is committed
-    (enable_auto_commit=False). That gives at-least-once delivery -- if
-    the process crashes after the db commit but before the Kafka offset
-    commit, the same reading is replayed. process_reading has no
-    message-level idempotency key, so a replayed reading is evaluated
-    again; since only genuine INACTIVE/CLEARED -> ACTIVE or
-    ACTIVE -> CLEARED transitions produce an outbox event, a replay that
-    lands on an already-ACTIVE (or already not-active) condition is a
-    harmless no-op event-wise. Add a message-level idempotency key if
-    this turns out to matter for the bookkeeping columns too.
     """
     consumer = AIOKafkaConsumer(
         settings.METER_READINGS_TOPIC,
@@ -70,15 +75,30 @@ async def run_consumer() -> None:
         group_id=settings.KAFKA_CONSUMER_GROUP,
         enable_auto_commit=False,
         auto_offset_reset="earliest",
+        max_poll_records=BATCH_SIZE,
     )
     await consumer.start()
-    logger.info("Detection Engine consumer started on topic %s", settings.METER_READINGS_TOPIC)
+    logger.info("Detection Engine consumer started on topic %s (batch=%d)", settings.METER_READINGS_TOPIC, BATCH_SIZE)
+
+    stats: dict = {"batches": 0, "readings": 0}
+    heartbeat = asyncio.create_task(_heartbeat(stats))
     try:
-        async for msg in consumer:
-            logger.debug("Received message from partition %d offset %d", msg.partition, msg.offset)
-            await handle_message(msg.value)
-            await consumer.commit()
+        while True:
+            results = await consumer.getmany(timeout_ms=POLL_TIMEOUT_MS, max_records=BATCH_SIZE)
+            messages = [msg for messages in results.values() for msg in messages]
+            if not messages:
+                continue
+
+            await handle_batch([msg.value for msg in messages])
+            await consumer.commit()  # whole batch at once, after db commit
+
+            last = messages[-1]
+            stats["batches"] += 1
+            stats["readings"] += len(messages)
+            stats["last_partition"] = last.partition
+            stats["last_offset"] = last.offset
     finally:
+        heartbeat.cancel()
         await consumer.stop()
         logger.info("Detection Engine consumer stopped")
 

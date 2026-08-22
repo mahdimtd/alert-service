@@ -12,7 +12,7 @@ from src.models.outbox_events import OutboxEvent
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 100
+BATCH_SIZE = settings.RELAY_BATCH_SIZE
 
 
 async def relay_once(producer: AIOKafkaProducer) -> int:
@@ -30,6 +30,10 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
         if not events:
             return 0
 
+        # Fire every publish without waiting; aiokafka coalesces them into
+        # producer-side batches per partition. Keyed by aggregate_id so all
+        # events of one alert stay ordered on the same partition.
+        futures = []
         for event in events:
             message = {
                 "event_id": str(event.event_id),
@@ -39,18 +43,33 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
                 "payload": event.payload,
                 "created_at": event.created_at.isoformat(),
             }
-            # Key by aggregate_id so every event for the same alert/
-            # notification lands on the same partition and stays ordered.
-            await producer.send_and_wait(
-                settings.OUTBOX_TOPIC,
-                key=str(event.aggregate_id).encode(),
-                value=json.dumps(message).encode(),
-            )
-            event.published_at = datetime.now(timezone.utc)
+            futures.append((
+                event,
+                producer.send(
+                    settings.OUTBOX_TOPIC,
+                    key=str(event.aggregate_id).encode(),
+                    value=json.dumps(message).encode(),
+                ),
+            ))
+
+        results = await asyncio.gather(*(fut for _, fut in futures), return_exceptions=True)
+
+        published_at = datetime.now(timezone.utc)
+        sent = failed = 0
+        for (event, _), result in zip(futures, results):
+            if isinstance(result, BaseException):
+                failed += 1
+                logger.error("Publish failed for outbox event %s: %r", event.id, result)
+                continue  # stays published_at NULL -> retried on a later cycle
+            event.published_at = published_at
+            sent += 1
 
         db.commit()
-        logger.info("Published %d events to Kafka", len(events))
-        return len(events)
+        if failed:
+            logger.warning("Published %d/%d events (%d failed, will retry)", sent, len(events), failed)
+        else:
+            logger.info("Published %d events to Kafka", sent)
+        return sent
     except Exception:
         db.rollback()
         raise
