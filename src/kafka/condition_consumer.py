@@ -9,7 +9,6 @@ from src.config import settings
 from src.database import SessionLocal
 from src.detection.state import CONDITION_CLEARED, CONDITION_DETECTED
 from src.lifecycle import manager as lifecycle
-from src.orchestrator.superviser import create_notifications
 from src.schemas.alert_signal import AlertSignal
 
 logger = logging.getLogger(__name__)
@@ -34,9 +33,9 @@ async def handle_message(raw_value: bytes) -> None:
                 value=Decimal(payload["value"]),
                 threshold=Decimal(payload["threshold"]),
             )
-            alert, should_notify = lifecycle.process_signal(db, signal)
-            if should_notify:
-                create_notifications(db, alert)
+            # process_signal enqueues notification.requested itself (same
+            # transaction) whenever the cooldown/snooze policy says so.
+            lifecycle.process_signal(db, signal)
 
         elif event_type == CONDITION_CLEARED:
             lifecycle.resolve_alert(db, payload["premises_id"], payload["rule_type"])

@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import DateTime, Identity, Index, Integer, String, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -32,6 +33,11 @@ class OutboxEvent(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
+    event_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        nullable=False,
+        server_default=text("gen_random_uuid()"),
+    )
     aggregate_type: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g. "ALERT", "NOTIFICATION"
     aggregate_id: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. "alert.created"

@@ -1,4 +1,4 @@
-import asyncio
+import asyncio  
 import json
 import logging
 from datetime import datetime, timezone
@@ -32,6 +32,7 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
 
         for event in events:
             message = {
+                "event_id": str(event.event_id),
                 "event_type": event.event_type,
                 "aggregate_type": event.aggregate_type,
                 "aggregate_id": event.aggregate_id,

@@ -43,6 +43,39 @@ def _outbox_payload(alert: Alert, extra: dict[str, Any] | None = None) -> dict[s
     return payload
 
 
+def _notification_requested_payload(alert: Alert) -> dict[str, Any]:
+    """
+    Input contract of the Notification Service. Self-contained: carries
+    the full alert context so the consumer never needs read access to
+    this service's database. Channel selection is deliberately absent --
+    that decision belongs to the consumer.
+    """
+    return {
+        "request_key": f"{alert.id}:{alert.occurrence_count}",
+        "alert_id": alert.id,
+        "premises_id": alert.premises_id,
+        "rule_type": alert.type,
+        "severity": alert.severity,
+        "title": alert.title,
+        "message": alert.message,
+        "current_value": str(alert.current_value) if alert.current_value is not None else None,
+        "threshold_value": str(alert.threshold_value) if alert.threshold_value is not None else None,
+        "unit": alert.unit,
+        "occurrence_count": alert.occurrence_count,
+    }
+
+
+def _enqueue_notification_request(db: Session, alert: Alert) -> None:
+    """
+    Must be called in the SAME transaction as the alert change that
+    requires notifying (transactional outbox).
+    """
+    enqueue_outbox_event(
+        db, "ALERT", alert.id, "notification.requested",
+        _notification_requested_payload(alert),
+    )
+
+
 def get_open_alert(db: Session, premises_id: int, fingerprint: str) -> Alert | None:
     stmt = select(Alert).where(
         Alert.premises_id == premises_id,
@@ -111,6 +144,7 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
         db.flush()
         _log_event(db, alert.id, "ALERT_CREATED", from_state=None, to_state="ACTIVE")
         enqueue_outbox_event(db, "ALERT", alert.id, "alert.created", _outbox_payload(alert))
+        _enqueue_notification_request(db, alert)  # fresh alert always notifies
         return alert, True
 
     previous_state = existing.state
@@ -139,6 +173,8 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
         )
 
     should_notify = was_snoozed or not within_cooldown
+    if should_notify:
+        _enqueue_notification_request(db, existing)
     return existing, should_notify
 
 def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None:
