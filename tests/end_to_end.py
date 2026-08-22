@@ -9,7 +9,7 @@ from src.lifecycle.manager import process_signal, resolve_alert
 from src.models.alert_rule import AlertRule
 from src.models.outbox_events import OutboxEvent
 from src.schemas.alert_signal import AlertSignal
-from src.schemas.input_message import EnergyReading
+from src.schemas.input_message import EnergyReading, TariffStep
 
 FAKE_PREMISES_ID = 999
 
@@ -19,15 +19,17 @@ def _high_reading() -> EnergyReading:
         premises_id=FAKE_PREMISES_ID,
         meter_type="FAHAM",
         measured_at=datetime.now(timezone.utc),
-        timezone="Asia/Tehran",
         total_kwh_hourly=Decimal("20"),
         total_kwh_daily=Decimal("400"),
         total_kwh_period=Decimal("6000"),
         pattern_threshold_period=Decimal("3000"),
-        cost_current=Decimal("15000"),
-        cost_hourly=Decimal("7500"),
-        cost_daily=Decimal("120000"),
-        cost_period=Decimal("3500000"),
+        tou_bucket="peak",
+        steps_period=[
+            TariffStep(step_from=Decimal("0"), step_to=Decimal("200")),
+            TariffStep(step_from=Decimal("200"), step_to=Decimal("500")),
+            TariffStep(step_from=Decimal("500"), step_to=Decimal("999999999")),
+        ],
+        cost_period=Decimal("108298941"),
     )
 
 

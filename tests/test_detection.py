@@ -4,7 +4,7 @@ from decimal import Decimal
 from src.database import SessionLocal
 from src.detection.engine import process_reading
 from src.models.alert_rule import AlertRule
-from src.schemas.input_message import EnergyReading
+from src.schemas.input_message import EnergyReading, TariffStep
 
 FAKE_PREMISES_ID = 999
 
@@ -21,15 +21,17 @@ def _reading(high: bool) -> EnergyReading:
         premises_id=FAKE_PREMISES_ID,
         meter_type="FAHAM",
         measured_at=datetime.now(timezone.utc),
-        timezone="Asia/Tehran",
         total_kwh_hourly=Decimal("10") * scale,
         total_kwh_daily=Decimal("200") * scale,
         total_kwh_period=pattern_threshold_period * scale,
         pattern_threshold_period=pattern_threshold_period,
-        cost_current=Decimal("15000"),
-        cost_hourly=Decimal("7500"),
-        cost_daily=Decimal("120000"),
-        cost_period=Decimal("3500000"),
+        tou_bucket="peak",
+        steps_period=[
+            TariffStep(step_from=Decimal("0"), step_to=Decimal("200")),
+            TariffStep(step_from=Decimal("200"), step_to=Decimal("500")),
+            TariffStep(step_from=Decimal("500"), step_to=Decimal("999999999")),
+        ],
+        cost_period=Decimal("108298941") if high else Decimal("0"),
     )
 
 

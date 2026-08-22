@@ -45,19 +45,18 @@ def _outbox_payload(alert: Alert, extra: dict[str, Any] | None = None) -> dict[s
 
 def _notification_requested_payload(alert: Alert) -> dict[str, Any]:
     """
-    Input contract of the Notification Service. Self-contained: carries
-    the full alert context so the consumer never needs read access to
-    this service's database. Channel selection is deliberately absent --
-    that decision belongs to the consumer.
+    Input contract of the Notification Service. Self-contained on DATA:
+    carries every number/context needed to decide and personalize, but
+    deliberately NO user-facing wording -- the consumer composes its own
+    texts per rule_type/channel/language.
     """
     return {
         "request_key": f"{alert.id}:{alert.occurrence_count}",
         "alert_id": alert.id,
         "premises_id": alert.premises_id,
         "rule_type": alert.type,
+        "rule_name": alert.title,
         "severity": alert.severity,
-        "title": alert.title,
-        "message": alert.message,
         "current_value": str(alert.current_value) if alert.current_value is not None else None,
         "threshold_value": str(alert.threshold_value) if alert.threshold_value is not None else None,
         "unit": alert.unit,
@@ -107,12 +106,14 @@ def _log_event(
 
 
 def _default_title_and_message(rule: AlertRule, value: Decimal, threshold: Decimal) -> tuple[str, str]:
-    title = rule.name
-    message = (
-        f"{rule.metric} is {value} {rule.unit}, "
-        f"crossing the {rule.operator} {threshold} {rule.unit} threshold."
+    """
+    Technical record text for alert.alerts (columns are NOT NULL).
+    User-facing wording is composed by the Notification Service -- this
+    service deliberately stays out of presentation.
+    """
+    return rule.name, (
+        f"{rule.metric}={value} {rule.unit} {rule.operator} {threshold} {rule.unit}"
     )
-    return title, message
 
 
 def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:

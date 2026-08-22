@@ -49,11 +49,8 @@ def reading(
     pattern_threshold_period: float = 300.0,
     tou_bucket: str | None = "off_peak",
     steps_period: list | None = None,
-    current_step: int | None = None,
-    next_step: int | None = None,
-    cost_current: float = 1000.0,
-    cost_hourly: float = 2000.0,
-    cost_daily: float = 50000.0,
+    current_step: float | None = None,
+    next_step: float | None = None,
     cost_period: float = 500000.0,
     measured_at: datetime | None = None,
 ) -> dict:
@@ -61,7 +58,6 @@ def reading(
         "premises_id": premises_id,
         "meter_type": "FAHAM",
         "measured_at": (measured_at or datetime.now(timezone.utc)).isoformat(),
-        "timezone": "Asia/Tehran",
         "total_kwh_hourly": total_kwh_hourly,
         "total_kwh_daily": total_kwh_daily,
         "total_kwh_period": total_kwh_period,
@@ -70,9 +66,6 @@ def reading(
         "steps_period": steps_period or [],
         "current_step": current_step,
         "next_step": next_step,
-        "cost_current": cost_current,
-        "cost_hourly": cost_hourly,
-        "cost_daily": cost_daily,
         "cost_period": cost_period,
     }
 
@@ -130,14 +123,14 @@ SCENARIOS = [
         reading(90004, total_kwh_hourly=0.9, tou_bucket="off_peak", pattern_threshold_period=300.0),
     ),
 
-    # --- 5. SHIFT_LOAD_TO_OFF_PEAK (fixed threshold = 2.0 kWh, from alert_rules) ---
+    # --- 5. SHIFT_LOAD_TO_OFF_PEAK (derived threshold = pattern/720 = 300/720 ≈ 0.417 kWh) ---
     (
         "shift_load_TRIGGER (90005)",
         reading(90005, total_kwh_hourly=2.5, tou_bucket="peak", pattern_threshold_period=300.0),
     ),
     (
-        "shift_load_NO_TRIGGER_below_fixed_threshold (90005)",
-        reading(90005, total_kwh_hourly=1.0, tou_bucket="peak", pattern_threshold_period=300.0),
+        "shift_load_NO_TRIGGER_below_derived_threshold (90005)",
+        reading(90005, total_kwh_hourly=0.3, tou_bucket="peak", pattern_threshold_period=300.0),
     ),
     (
         "shift_load_NO_TRIGGER_not_peak_bucket (90005b)",
@@ -149,27 +142,32 @@ SCENARIOS = [
         "near_pattern_NO_TRIGGER_below_90pct (90006)",
         reading(
             90006, total_kwh_period=250.0,
-            steps_period=[0, 300, 600], next_step=1,
-        ),  # 250/300 = 83.3% -> below 90
+            steps_period=[
+                {"step_from": 0.0, "step_to": 300.0},
+                {"step_from": 300.0, "step_to": 600.0},
+            ],
+        ),  # next bound above 250 is 300 -> 250/300 = 83.3% -> below 90
     ),
     (
         "near_pattern_TRIGGER_at_90pct (90006)",
         reading(
             90006, total_kwh_period=280.0,
-            steps_period=[0, 300, 600], next_step=1,
-        ),  # 280/300 = 93.3% -> above 90
+            steps_period=[
+                {"step_from": 0.0, "step_to": 300.0},
+                {"step_from": 300.0, "step_to": 600.0},
+            ],
+        ),  # next bound above 280 is 300 -> 280/300 = 93.3% -> above 90
     ),
     (
-        "near_pattern_NO_DATA_missing_next_step (90006b)",
-        # next_step/steps_period absent, as in the real current payload today
-        # (upstream ENERGY.AGG hasn't added them yet) -> rule must be skipped, not crash.
+        "near_pattern_NO_DATA_missing_steps (90006b)",
+        # steps_period absent -> rule must be skipped, not crash.
         reading(90006, total_kwh_period=280.0, pattern_threshold_period=300.0),
     ),
 
     # --- 7. Disabled rule sanity check (COST_THRESHOLD_EXCEEDED, enabled=false) ---
     (
         "disabled_rule_cost_should_NOT_alert (90007)",
-        reading(90007, cost_current=5_000_000.0, cost_period=10_000_000.0),
+        reading(90007, cost_period=10_000_000.0),
     ),
 
     # --- 8. Cooldown behavior: same rule twice fast -> 1 alert, occurrence bumps,
