@@ -21,8 +21,6 @@ _OPERATORS = {
 
 
 def find_matching_rules(db: Session) -> list[AlertRule]:
-    """Every enabled rule -- inputs no longer differ by meter_type, so
-    suitable_for is no longer used to filter."""
     stmt = select(AlertRule).where(AlertRule.enabled == True)  # noqa: E712
     return list(db.execute(stmt).scalars().all())
 
@@ -44,7 +42,6 @@ def _event_payload(
         "rule_type": rule.type,
         "rule_name": rule.name,
         "premises_id": row.premises_id,
-        "condition_key": row.condition_key,
         "condition_instance_id": str(row.condition_instance_id),
         "metric": rule.metric,
         "operator": rule.operator,
@@ -82,7 +79,6 @@ def process_reading(db: Session, reading: EnergyReading) -> list[dict]:
 
         outcomes.append({
             "rule_type": rule.type,
-            "condition_key": transition.state.condition_key,
             "condition_met": met,
             "status": transition.state.status,
             "event_type": transition.event_type,

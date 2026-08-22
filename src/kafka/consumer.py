@@ -19,7 +19,13 @@ async def handle_message(raw_value: bytes) -> None:
     except Exception:
         logger.exception("Skipping unparseable meter reading message")
         return
-    logger.debug("Processing reading: premises=%s meter=%s value=%s", reading.premises_id, reading.meter_id, reading.value)
+    logger.debug(
+        "Processing reading: premises=%s meter=%s measured_at=%s total_kwh_period=%s",
+        reading.premises_id,
+        reading.meter_type,
+        reading.measured_at,
+        reading.total_kwh_period,
+    )
 
     db = SessionLocal()
     try:

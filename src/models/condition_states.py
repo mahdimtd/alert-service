@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Index, Integer, Numeric, PrimaryKeyConstraint, String, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Index, Integer, Numeric, PrimaryKeyConstraint, String, text,ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,7 +16,6 @@ class ConditionState(Base):
         PrimaryKeyConstraint(
             "premises_id",
             "rule_id",
-            "condition_key",
             name="condition_states_pk",
         ),
         Index(
@@ -38,8 +37,7 @@ class ConditionState(Base):
     )
 
     premises_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    rule_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    condition_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    rule_id: Mapped[int] = mapped_column(Integer,ForeignKey("alert.alert_rules.id"), nullable=False)
     condition_instance_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         nullable=False,

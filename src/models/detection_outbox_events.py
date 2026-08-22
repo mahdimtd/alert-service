@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Identity, Index, Integer, String, Text, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Identity, Index, Integer, String, Text, text, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,7 +51,7 @@ class DetectionOutboxEvent(Base):
     aggregate_type: Mapped[str] = mapped_column(String(50), nullable=False)
     aggregate_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     premises_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    rule_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    rule_id: Mapped[int] = mapped_column(Integer,ForeignKey("alert.alert_rules.id"), nullable=False)
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     topic: Mapped[str] = mapped_column(String(100), nullable=False)
     partition_key: Mapped[str] = mapped_column(String(255), nullable=False)

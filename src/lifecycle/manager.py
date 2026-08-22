@@ -123,9 +123,23 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
     existing.occurrence_count += 1
     existing.last_detected_at = now
     existing.current_value = signal.value
-    existing.threshold_value = signal.threshold  # NEW: threshold can drift per-reading now
+    existing.threshold_value = signal.threshold  # threshold can drift per-reading
 
-    # ... rest unchanged
+    if was_snoozed:
+        existing.state = "ACTIVE"
+        existing.snoozed_until = None
+        _log_event(
+            db, existing.id, "ALERT_REACTIVATED",
+            from_state=previous_state, to_state="ACTIVE",
+        )
+    else:
+        _log_event(
+            db, existing.id, "ALERT_UPDATED",
+            from_state=previous_state, to_state=previous_state,
+        )
+
+    should_notify = was_snoozed or not within_cooldown
+    return existing, should_notify
 
 def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None:
     """

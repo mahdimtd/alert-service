@@ -28,6 +28,7 @@ def main():
             premises_id=FAKE_PREMISES_ID,
             rule_id=rule.id,
             value=rule.threshold + Decimal("1"),
+            threshold=rule.threshold,
         )
         alert, should_notify = process_signal(db, signal)
         db.commit()

@@ -50,7 +50,6 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
                 "aggregate_id": str(event.aggregate_id),
                 "premises_id": event.premises_id,
                 "rule_id": str(event.rule_id),
-                "condition_key": event.payload.get("condition_key"),
                 "payload": event.payload,
                 "created_at": event.created_at.isoformat(),
             }

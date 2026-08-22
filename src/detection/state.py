@@ -6,16 +6,9 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.detection.identifiers import rule_uuid
 from src.models.alert_rule import AlertRule
 from src.models.condition_states import ConditionState
 
-# Every rule currently represents a single, instantaneous "value crossed
-# threshold" condition, so one condition_key is enough today. If a rule
-# ever needs more than one independently-tracked condition (e.g. an
-# instantaneous breach AND a separate sustained-duration breach), give
-# each its own condition_key instead of overloading this one.
-THRESHOLD_BREACH_CONDITION_KEY = "threshold_breach"
 
 # Placeholder until alert_rules gains a real version column. Every
 # condition_states row is written with this fixed value for now. The
@@ -42,9 +35,7 @@ class ConditionTransition:
         return self.event_type is not None
 
 
-def _get_locked(
-    db: Session, premises_id: int, rule_id, condition_key: str
-) -> ConditionState | None:
+def _get_locked(db: Session, premises_id: int, rule_id) -> ConditionState | None:
     # Row-level lock so two readings for the same (premises, rule,
     # condition_key) landing in overlapping transactions can't both
     # decide "this is a fresh transition" at once.
@@ -53,7 +44,6 @@ def _get_locked(
         .where(
             ConditionState.premises_id == premises_id,
             ConditionState.rule_id == rule_id,
-            ConditionState.condition_key == condition_key,
         )
         .with_for_update()
     )
@@ -67,18 +57,16 @@ def apply_reading(
     value: Decimal,
     condition_met: bool,
     threshold: Decimal,
-    condition_key: str = THRESHOLD_BREACH_CONDITION_KEY,
 ) -> ConditionTransition:
-    rid = rule_uuid(rule.id)
+    rid = rule.id
     now = datetime.now(timezone.utc)
 
-    row = _get_locked(db, premises_id, rid, condition_key)
+    row = _get_locked(db, premises_id, rid)
 
     if row is None:
         row = ConditionState(
             premises_id=premises_id,
             rule_id=rid,
-            condition_key=condition_key,
             status=INACTIVE,
             rule_version=RULE_CONTENT_VERSION_PLACEHOLDER,
         )
