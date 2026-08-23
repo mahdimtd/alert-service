@@ -248,3 +248,37 @@ quiet-hours postponement scheduling. This service keeps only the technical
 Relationship summary: one-way feed over Kafka (`alert.outbox`), stable IDs
 (`event_id`, `request_key`) provided by this side, no shared tables after the
 phase-2 preferences move, no REST coupling required.
+
+## REST API — Production Readiness
+
+Current state (verified live): `GET /alerts`, `GET /alerts/{id}`,
+`POST /alerts/{id}/acknowledge` and `POST /alerts/{id}/snooze` work end to end,
+including transition guards (`400`), body validation (`422`), missing ids
+(`404`) and CORS preflight (`200`). `GET /health` is a plain liveness probe.
+
+Before exposing this API to a real frontend, apply the following:
+
+1. **Restrict CORS** — `main.py` currently sets `allow_origins=["*"]`.
+   Replace with the actual frontend origin(s):
+   ```python
+   app.add_middleware(
+       CORSMiddleware,
+       allow_origins=["https://app.yourdomain.com"],
+       ...
+   )
+   ```
+2. **Add authentication** — there is none; anyone can acknowledge or snooze
+   alerts. At minimum protect mutating routes (acknowledge / snooze) with a
+   bearer token / JWT dependency.
+3. **Paginate `GET /alerts`** — it returns every row ordered by
+   `created_at desc`. With live volume that becomes unbounded. Add
+   `limit`/`offset` query params (with a hard cap, e.g. `limit <= 200`).
+4. **Validate snooze time** — `SnoozeRequest.until` accepts dates in the
+   past. Reject with `422` unless `until > now`.
+5. **Deal with `POST /readings`** — it is an internal testing hook that lets
+   any caller inject arbitrary readings straight into the Detection Engine.
+   Its response model also needs fixing (`api/schemas.py::DetectionOutcomeOut`
+   still declares `condition_key`, which the engine no longer emits -> 500).
+   Either fix the schema or (recommended for production) remove the route /
+   put it behind admin auth.
+
