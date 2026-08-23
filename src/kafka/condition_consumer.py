@@ -4,6 +4,7 @@ import logging
 from decimal import Decimal
 
 from aiokafka import AIOKafkaConsumer
+from aiokafka.errors import CommitFailedError, KafkaError
 
 from src.config import settings
 from src.database import SessionLocal
@@ -96,6 +97,11 @@ async def run_consumer() -> None:
         enable_auto_commit=False,
         auto_offset_reset="earliest",
         max_poll_records=BATCH_SIZE,
+        # tolerate long GC pauses / network blips without getting kicked:
+        max_poll_interval_ms=600_000,   # 10 min between polls is still fine
+        session_timeout_ms=60_000,
+        heartbeat_interval_ms=10_000,
+        request_timeout_ms=120_000,     # must exceed session_timeout; absorbs link jitter
     )
     await consumer.start()
     logger.info("Lifecycle Manager consumer started on topic %s (batch=%d)", settings.CONDITION_EVENTS_TOPIC, BATCH_SIZE)
@@ -110,7 +116,15 @@ async def run_consumer() -> None:
                 continue
 
             await handle_batch([msg.value for msg in messages])
-            await consumer.commit()
+            try:
+                await consumer.commit()
+            except (CommitFailedError, KafkaError):
+                # group rebalanced / member kicked (e.g. network pause or a
+                # second instance with the same group). Log and keep going:
+                # the next poll rejoins automatically and the batch is simply
+                # reprocessed (safe -- lifecycle transitions are idempotent).
+                logger.warning("Offset commit failed after rebalance; reprocessing current batch", exc_info=True)
+                continue
 
             last = messages[-1]
             stats["batches"] += 1

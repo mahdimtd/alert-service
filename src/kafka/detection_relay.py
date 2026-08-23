@@ -10,6 +10,8 @@ from src.config import settings
 from src.database import SessionLocal
 from src.models.detection_outbox_events import DetectionOutboxEvent
 
+import src.models  # noqa: F401  -- registers alert.alert_rules, the FK target of rule_id
+
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = settings.DETECTION_RELAY_BATCH_SIZE
@@ -120,7 +122,10 @@ async def run_relay() -> None:
     process to crash -- the row is left FAILED with a next_retry_at and
     the relay moves on to the rest of the batch.
     """
-    producer = AIOKafkaProducer(bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS)
+    producer = AIOKafkaProducer(
+        bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+        request_timeout_ms=90_000,   # absorb link jitter on slow paths
+    )
     await producer.start()
     logger.info("Detection relay started, polling every %ds", settings.DETECTION_OUTBOX_POLL_INTERVAL_SECONDS)
     try:

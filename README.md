@@ -148,11 +148,13 @@ Topic `alert.outbox` — envelope published by `relay.py`:
   "event_id": "a0732c1d-0ec8-4afc-a8f1-4c510a7a2192",
   "event_type": "notification.requested",
   "aggregate_type": "ALERT",
-  "aggregate_id": 10,
   "payload": { "...": "see table" },
   "created_at": "2026-08-22T12:57:56.887000+00:00"
 }
 ```
+
+(The Kafka partition key is the alert id, keeping every event of one alert
+ordered on a single partition; the id itself travels inside `payload.alert_id`.)
 
 | `event_type` | `payload` |
 |---|---|

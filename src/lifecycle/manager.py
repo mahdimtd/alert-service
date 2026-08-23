@@ -58,7 +58,11 @@ def _notification_requested_payload(alert: Alert) -> dict[str, Any]:
         "rule_name": alert.title,
         "severity": alert.severity,
         "current_value": str(alert.current_value) if alert.current_value is not None else None,
-        "threshold_value": str(alert.threshold_value) if alert.threshold_value is not None else None,
+        "threshold_value": (
+            str(alert.threshold_value.quantize(Decimal("0.0001")))
+            if alert.threshold_value is not None
+            else None
+        ),
         "unit": alert.unit,
         "occurrence_count": alert.occurrence_count,
     }

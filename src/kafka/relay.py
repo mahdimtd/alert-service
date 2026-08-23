@@ -39,7 +39,9 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
                 "event_id": str(event.event_id),
                 "event_type": event.event_type,
                 "aggregate_type": event.aggregate_type,
-                "aggregate_id": event.aggregate_id,
+                # aggregate_id intentionally omitted from the wire format --
+                # consumers identify the subject via payload.alert_id.
+                # (still used below as the partition key)
                 "payload": event.payload,
                 "created_at": event.created_at.isoformat(),
             }
@@ -93,7 +95,10 @@ async def run_relay() -> None:
     (aggregate_type, aggregate_id, event_type, created_at) if that
     matters to them.
     """
-    producer = AIOKafkaProducer(bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS)
+    producer = AIOKafkaProducer(
+        bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+        request_timeout_ms=90_000,   # absorb link jitter on slow paths
+    )
     await producer.start()
     logger.info("Alert relay started, polling every %ds", settings.OUTBOX_POLL_INTERVAL_SECONDS)
     try:
