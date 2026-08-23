@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from src.models.alert_rule import AlertRule
@@ -35,10 +36,38 @@ class ConditionTransition:
         return self.event_type is not None
 
 
-def _get_locked(db: Session, premises_id: int, rule_id) -> ConditionState | None:
+def _get_locked(db: Session, premises_id: int, rule_id) -> ConditionState:
     # Row-level lock so two readings for the same (premises, rule,
     # condition_key) landing in overlapping transactions can't both
     # decide "this is a fresh transition" at once.
+    #
+    # NOTE: `SELECT ... FOR UPDATE` can only lock a row that already
+    # exists. If two consumer processes both see the FIRST-EVER reading
+    # for the same (premises_id, rule_id) at the same time, both will
+    # find nothing to lock, both will try to INSERT, and one will fail
+    # with a duplicate-key error on the (premises_id, rule_id) primary
+    # key. The upsert below makes row creation itself atomic (the second
+    # writer's INSERT is a no-op instead of a conflict), so by the time
+    # we run the SELECT ... FOR UPDATE, the row is guaranteed to exist
+    # and exactly one process will hold the lock at a time.
+    insert_stmt = (
+        pg_insert(ConditionState)
+        .values(
+            premises_id=premises_id,
+            rule_id=rule_id,
+            status=INACTIVE,
+            rule_version=RULE_CONTENT_VERSION_PLACEHOLDER,
+            # Explicit 0 (instead of relying on the column's server_default
+            # of 1) so the "+1" below still lands on version=1 for a
+            # brand-new row, matching the previous behavior.
+            version=0,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[ConditionState.premises_id, ConditionState.rule_id],
+        )
+    )
+    db.execute(insert_stmt)
+
     stmt = (
         select(ConditionState)
         .where(
@@ -47,7 +76,7 @@ def _get_locked(db: Session, premises_id: int, rule_id) -> ConditionState | None
         )
         .with_for_update()
     )
-    return db.execute(stmt).scalar_one_or_none()
+    return db.execute(stmt).scalar_one()
 
 
 def apply_reading(
@@ -61,16 +90,9 @@ def apply_reading(
     rid = rule.id
     now = datetime.now(timezone.utc)
 
+    # _get_locked always returns an existing, locked row now (it upserts
+    # first), so there's no separate "create if missing" branch here.
     row = _get_locked(db, premises_id, rid)
-
-    if row is None:
-        row = ConditionState(
-            premises_id=premises_id,
-            rule_id=rid,
-            status=INACTIVE,
-            rule_version=RULE_CONTENT_VERSION_PLACEHOLDER,
-        )
-        db.add(row)
 
     was_active = row.status == ACTIVE
     event_type: str | None = None
