@@ -32,6 +32,17 @@ async def handle_batch(raw_values: list[bytes]) -> int:
     if not readings:
         return 0
 
+    # All DB work below is synchronous (psycopg2). Run it in a worker
+    # thread via asyncio.to_thread so a slow query or a row lock only
+    # blocks that thread -- never this coroutine's event loop. If it ran
+    # directly on the loop, it would also freeze the independent
+    # _heartbeat task and aiokafka's own background heartbeat, which is
+    # exactly what gets a consumer kicked from its group with
+    # UnknownMemberIdError while it's stuck waiting on the DB.
+    return await asyncio.to_thread(_handle_batch_sync, readings)
+
+
+def _handle_batch_sync(readings: list[EnergyReading]) -> int:
     db = SessionLocal()
     try:
         rules = find_matching_rules(db)

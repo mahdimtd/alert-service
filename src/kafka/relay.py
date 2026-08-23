@@ -15,17 +15,24 @@ logger = logging.getLogger(__name__)
 BATCH_SIZE = settings.RELAY_BATCH_SIZE
 
 
+def _poll_pending(db) -> list[OutboxEvent]:
+    stmt = (
+        select(OutboxEvent)
+        .where(OutboxEvent.published_at.is_(None))
+        .order_by(OutboxEvent.id)
+        .limit(BATCH_SIZE)
+    )
+    return db.execute(stmt).scalars().all()
+
+
 async def relay_once(producer: AIOKafkaProducer) -> int:
     """Publish one batch of unpublished outbox rows. Returns how many were sent."""
     db = SessionLocal()
     try:
-        stmt = (
-            select(OutboxEvent)
-            .where(OutboxEvent.published_at.is_(None))
-            .order_by(OutboxEvent.id)
-            .limit(BATCH_SIZE)
-        )
-        events = db.execute(stmt).scalars().all()
+        # Synchronous (psycopg2) DB read -- off the event loop via
+        # asyncio.to_thread so a slow query or a row lock only blocks a
+        # worker thread, not this process's whole async loop.
+        events = await asyncio.to_thread(_poll_pending, db)
         logger.debug("Polled outbox: found %d events", len(events))
         if not events:
             return 0
@@ -66,17 +73,18 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             event.published_at = published_at
             sent += 1
 
-        db.commit()
+        # Synchronous (psycopg2) commit -- also off the event loop.
+        await asyncio.to_thread(db.commit)
         if failed:
             logger.warning("Published %d/%d events (%d failed, will retry)", sent, len(events), failed)
         else:
             logger.info("Published %d events to Kafka", sent)
         return sent
     except Exception:
-        db.rollback()
+        await asyncio.to_thread(db.rollback)
         raise
     finally:
-        db.close()
+        await asyncio.to_thread(db.close)
 
 
 async def run_relay() -> None:

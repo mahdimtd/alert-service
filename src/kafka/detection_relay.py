@@ -23,22 +23,29 @@ def _backoff_seconds(attempt_count: int) -> int:
     return min(base * (2 ** max(attempt_count - 1, 0)), 3600)
 
 
+def _poll_pending(db, now: datetime) -> list[DetectionOutboxEvent]:
+    stmt = (
+        select(DetectionOutboxEvent)
+        .where(
+            DetectionOutboxEvent.status.in_(("PENDING", "FAILED")),
+            (DetectionOutboxEvent.next_retry_at.is_(None))
+            | (DetectionOutboxEvent.next_retry_at <= now),
+        )
+        .order_by(DetectionOutboxEvent.id)
+        .limit(BATCH_SIZE)
+    )
+    return db.execute(stmt).scalars().all()
+
+
 async def relay_once(producer: AIOKafkaProducer) -> int:
     """Publish one batch of pending/retryable detection outbox rows. Returns how many were sent."""
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-        stmt = (
-            select(DetectionOutboxEvent)
-            .where(
-                DetectionOutboxEvent.status.in_(("PENDING", "FAILED")),
-                (DetectionOutboxEvent.next_retry_at.is_(None))
-                | (DetectionOutboxEvent.next_retry_at <= now),
-            )
-            .order_by(DetectionOutboxEvent.id)
-            .limit(BATCH_SIZE)
-        )
-        events = db.execute(stmt).scalars().all()
+        # Synchronous (psycopg2) DB read -- off the event loop via
+        # asyncio.to_thread so a slow query or a row lock only blocks a
+        # worker thread, not this process's whole async loop.
+        events = await asyncio.to_thread(_poll_pending, db, now)
         logger.debug("Polled outbox: found %d events", len(events))
         if not events:
             return 0
@@ -93,17 +100,18 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
             event.error_message = None
             sent += 1
 
-        db.commit()
+        # Synchronous (psycopg2) commit -- also off the event loop.
+        await asyncio.to_thread(db.commit)
         if failed:
             logger.warning("Published %d/%d events (%d failed -> retry scheduled)", sent, len(events), failed)
         else:
             logger.info("Published %d events to Kafka", sent)
         return sent
     except Exception:
-        db.rollback()
+        await asyncio.to_thread(db.rollback)
         raise
     finally:
-        db.close()
+        await asyncio.to_thread(db.close)
 
 
 async def run_relay() -> None:

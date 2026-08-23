@@ -8,6 +8,7 @@ dependencies = [
     "aiokafka>=0.14.0",
     "fastapi>=0.141.1",
     "psycopg2-binary>=2.9.12",
+    "py-spy>=0.4.2",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.2",
