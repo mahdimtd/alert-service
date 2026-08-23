@@ -1,0 +1,72 @@
+image: docker.arvancloud.ir/docker:latest
+
+stages:
+  - build
+  - deploy
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY/hems/services/analytics-pipeline/alert-service
+  TAG: $CI_COMMIT_SHORT_SHA
+  CONTAINER_NAME: homeiot-alert-service
+  GIT_HOST: "192.168.140.41:8000"
+  CI_REGISTRY: "192.168.140.41:5000"
+  DOCKER_HOST: unix:///var/run/docker.sock
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+
+build:
+  stage: build
+  tags:
+    - docker
+  before_script:
+    - git remote set-url origin http://$GIT_HOST/hems/services/analytics-pipeline/alert-service.git
+    
+    
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" http://$CI_REGISTRY
+    - |
+      docker build \
+        --network host \
+        --cache-from $IMAGE_NAME:latest \
+        -t $IMAGE_NAME:$TAG \
+        -t $IMAGE_NAME:latest .
+    - docker push $IMAGE_NAME:$TAG
+    - docker push $IMAGE_NAME:latest
+
+deploy:
+  stage: deploy
+  tags:
+    - docker
+  script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker pull "$IMAGE_NAME:$TAG"
+
+    - apk add --no-cache gettext
+    - envsubst < .env.template > .env
+
+    - docker stop -t 10 "$CONTAINER_NAME" || true
+    - docker rm -f "$CONTAINER_NAME" || true
+
+    - |
+      docker run -d \
+        --network homeiot-services \
+        -p 1220:1220 \
+        --name "$CONTAINER_NAME" \
+        --restart unless-stopped \
+        --env-file .env \
+        "$IMAGE_NAME:$TAG"
+
+    - rm -f .env
+
+    - echo "Waiting a few seconds for startup check..."
+    - sleep 8
+    - |
+      if docker ps --filter "name=^$CONTAINER_NAME$" --filter "status=running" | grep -q "$CONTAINER_NAME"; then
+        echo "Container is running successfully."
+        docker logs --tail 100 "$CONTAINER_NAME"
+      else
+        echo "Container crashed immediately. Showing full logs:"
+        docker logs "$CONTAINER_NAME"
+        exit 1
+      fi
+
