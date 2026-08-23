@@ -11,7 +11,7 @@ wheels/
 .venv
 .idea
 /doc
-
+.env
 
 AGENTS.md
 .codex
