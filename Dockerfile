@@ -52,4 +52,12 @@ RUN pip install --no-cache-dir \
 EXPOSE 1220
 
 CMD ["opentelemetry-instrument", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "1220"]
+CMD ["uv", "run" , "python", "-m", "src.kafka.detection_relay"]
+
+
+#uv run python -m src.kafka.consumer         # Detection Engine (reads energy.alert)
+#uv run python -m src.kafka.detection_relay  # detection.outbox_events -> Kafka
+#uv run python -m src.kafka.condition_consumer  # condition events -> Lifecycle Manager
+#uv run python -m src.kafka.relay
+
 
