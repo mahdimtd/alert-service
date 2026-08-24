@@ -23,6 +23,16 @@ ENV OTEL_SERVICE_NAME="homeiot-alert-service" \
     OTEL_METRICS_EXPORTER="none" \
     OTEL_LOGS_EXPORTER="none"
 
+# System utilities
+RUN apt-get update && \
+
+    apt-get install -y --no-install-recommends \
+        curl \
+        iputils-ping && \
+    rm -rf /var/lib/apt/lists/*
+
+
+
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock README.md ./
