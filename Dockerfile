@@ -40,9 +40,17 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-ENV PIP_INDEX_URL=https://mirror-pypi.runflare.com/simple
-ENV PIP_TRUSTED_HOST=mirror-pypi.runflare.com
-ENV UV_INDEX_URL=https://mirror-pypi.runflare.com/simple
+# ENV PIP_INDEX_URL=https://mirror-pypi.runflare.com/simple
+# ENV PIP_TRUSTED_HOST=mirror-pypi.runflare.com
+# ENV UV_INDEX_URL=https://mirror-pypi.runflare.com/simple
+
+#PIP_INDEX_URL=https://package-mirror.liara.ir/repository/pypi/simple
+
+ENV PIP_INDEX_URL=https://package-mirror.liara.ir/repository/pypi/simple
+ENV PIP_TRUSTED_HOST=package-mirror.liara.ir
+# ENV UV_INDEX_URL=https://mirror-pypi.runflare.com/simple
+
+
 
 ENV OTEL_SERVICE_NAME="homeiot-alert-service" \
     OTEL_EXPORTER_OTLP_ENDPOINT="http://jaeger:4317" \
@@ -58,7 +66,6 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv pip install \
     --system \
     --no-cache \
-    --index-url https://mirror-pypi.runflare.com/simple \
     -r pyproject.toml
 
 COPY src/ ./src
