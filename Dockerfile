@@ -17,7 +17,7 @@ ENV PIP_TRUSTED_HOST=package-mirror.liara.ir
 
 
 ENV OTEL_SERVICE_NAME="homeiot-alert-service" \
-    OTEL_EXPORTER_OTLP_ENDPOINT="http://192.168.140.41:4317" \
+    OTEL_EXPORTER_OTLP_ENDPOINT="http://jaeger:4317" \
     OTEL_EXPORTER_OTLP_PROTOCOL="grpc" \
     OTEL_TRACES_EXPORTER="otlp" \
     OTEL_METRICS_EXPORTER="none" \
