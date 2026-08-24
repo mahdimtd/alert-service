@@ -1,9 +1,9 @@
 FROM docker.arvancloud.ir/library/python:3.12-slim
-WORKDIR /src
+WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/src
+ENV PYTHONPATH=/app
 ENV PIP_INDEX_URL=https://mirror-pypi.runflare.com/simple
 ENV PIP_TRUSTED_HOST=mirror-pypi.runflare.com
 
@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock README.md ./
 RUN uv pip install --system --no-cache -r pyproject.toml
 
-COPY src/ /src
+COPY src/ ./src
 
 RUN pip install --no-cache-dir \
         opentelemetry-distro \
@@ -29,4 +29,4 @@ RUN pip install --no-cache-dir \
 
 EXPOSE 1220
 
-CMD ["opentelemetry-instrument", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "1220"]
+CMD ["opentelemetry-instrument", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "1220"]
