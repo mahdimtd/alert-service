@@ -14,10 +14,10 @@ ENV OTEL_SERVICE_NAME="homeiot-alert-service" \
     OTEL_METRICS_EXPORTER="none" \
     OTEL_LOGS_EXPORTER="none"
 
-RUN pip install --no-cache-dir uv
+RUN pip install -vvv --no-cache-dir uv
 
 COPY pyproject.toml uv.lock README.md ./
-RUN uv pip install --system --no-cache -r pyproject.toml
+RUN uv pip install -vvv --system --no-cache -r pyproject.toml
 
 COPY src/ ./src
 
