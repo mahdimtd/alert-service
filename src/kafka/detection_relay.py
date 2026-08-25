@@ -12,7 +12,7 @@ from src.models.detection_outbox_events import DetectionOutboxEvent
 
 import src.models  # noqa: F401  -- registers alert.alert_rules, the FK target of rule_id
 
-logger = logging.getLogger("detection output worker")
+logger = logging.getLogger("detection-output-worker")
 
 BATCH_SIZE = settings.DETECTION_RELAY_BATCH_SIZE
 

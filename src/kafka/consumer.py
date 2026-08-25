@@ -10,7 +10,7 @@ from src.database import SessionLocal
 from src.detection.engine import find_matching_rules, process_reading
 from src.schemas.input_message import EnergyReading
 
-logger = logging.getLogger("alert input worker")
+logger = logging.getLogger("alert-input-worker")
 
 BATCH_SIZE = settings.CONSUMER_BATCH_SIZE
 POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS

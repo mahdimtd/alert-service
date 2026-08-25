@@ -10,7 +10,7 @@ from src.config import settings
 from src.database import SessionLocal
 from src.models.outbox_events import OutboxEvent
 
-logger = logging.getLogger("alert output worker")
+logger = logging.getLogger("alert-output-worker")
 
 BATCH_SIZE = settings.RELAY_BATCH_SIZE
 

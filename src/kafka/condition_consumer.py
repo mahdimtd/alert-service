@@ -12,7 +12,7 @@ from src.detection.state import CONDITION_CLEARED, CONDITION_DETECTED
 from src.lifecycle import manager as lifecycle
 from src.schemas.alert_signal import AlertSignal
 
-logger = logging.getLogger("lifecycle output worker")
+logger = logging.getLogger("lifecycle-output-worker")
 
 BATCH_SIZE = settings.LIFECYCLE_BATCH_SIZE
 POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS
