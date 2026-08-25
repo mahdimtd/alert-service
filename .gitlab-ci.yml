@@ -163,8 +163,8 @@ deploy:
         exit 1
       fi
 
-  after_script:
-    - docker logout http://$CI_REGISTRY || true
-    - rm -f $DEPLOY_DIR/.env || true
+  # after_script:
+  #   - docker logout http://$CI_REGISTRY || true
+  #   - rm -f $DEPLOY_DIR/.env || true
 
 
