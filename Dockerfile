@@ -81,7 +81,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OTEL_EXPORTER_OTLP_PROTOCOL="grpc" \
     OTEL_TRACES_EXPORTER="otlp" \
     OTEL_METRICS_EXPORTER="none" \
-    OTEL_LOGS_EXPORTER="none"
+    OTEL_LOGS_EXPORTER="none" \
+    HOME=/app \
+    UV_CACHE_DIR=/app/.cache/uv
 
 # Create a non-root user
 RUN addgroup --system --gid 1001 appuser && \
