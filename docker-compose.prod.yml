@@ -1,0 +1,103 @@
+services:
+  alert-service:
+    image: ${IMAGE_NAME:-hems/services/analytics-pipeline/alert-service}:${TAG:-latest}
+    container_name: homeiot-alert-service
+    restart: unless-stopped
+    command: opentelemetry-instrument uvicorn src.main:app --host 0.0.0.0 --port 1220
+    ports:
+      - "1220:1220"
+    environment:
+      - OTEL_SERVICE_NAME=homeiot-alert-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_LOGS_EXPORTER=none
+    env_file:
+      - .env
+    networks:
+      - homeiot-services
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1220/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  kafka-consumer:
+    image: ${IMAGE_NAME:-hems/services/analytics-pipeline/alert-service}:${TAG:-latest}
+    container_name: homeiot-alert-service-kafka-consumer
+    restart: unless-stopped
+    command: uv run python -m src.kafka.consumer
+    depends_on:
+      - alert-service
+    env_file:
+      - .env
+    networks:
+      - homeiot-services
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  detection-relay:
+    image: ${IMAGE_NAME:-hems/services/analytics-pipeline/alert-service}:${TAG:-latest}
+    container_name: homeiot-alert-service-detection-relay
+    restart: unless-stopped
+    command: uv run python -m src.kafka.detection_relay
+    depends_on:
+      - alert-service
+    env_file:
+      - .env
+    networks:
+      - homeiot-services
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  condition-consumer:
+    image: ${IMAGE_NAME:-hems/services/analytics-pipeline/alert-service}:${TAG:-latest}
+    container_name: homeiot-alert-service-condition-consumer
+    restart: unless-stopped
+    command: uv run python -m src.kafka.condition_consumer
+    depends_on:
+      - alert-service
+    env_file:
+      - .env
+    networks:
+      - homeiot-services
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  relay:
+    image: ${IMAGE_NAME:-hems/services/analytics-pipeline/alert-service}:${TAG:-latest}
+    container_name: homeiot-alert-service-relay
+    restart: unless-stopped
+    command: uv run python -m src.kafka.relay
+    depends_on:
+      - alert-service
+    env_file:
+      - .env
+    networks:
+      - homeiot-services
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  homeiot-services:
+    external: true
+    
