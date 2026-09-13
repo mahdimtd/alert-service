@@ -1,7 +1,5 @@
-##FROM docker.arvancloud.ir/library/python:3.12-slim
+###FROM docker.arvancloud.ir/library/python:3.12-slim
 FROM nexus.sedrapro.com:8444/python:3.12-slim
-
-
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -21,10 +19,10 @@ RUN apt-get update && \
 
 COPY pyproject.toml README.md ./
 
+COPY src/ ./src
+
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
-
-COPY src/ ./src
 
 RUN chown -R appuser:appuser /app
 
