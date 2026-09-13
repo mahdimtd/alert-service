@@ -1,0 +1,118 @@
+stages:
+  - build
+  - gitops  
+
+  
+variables:
+
+  GITOPS_REPOSITORY: "https://gitlab.sedrapro.com/hems/services/analytics-pipeline/alert/alertservice-gitops.git"
+  SERVICE_NAME: "hems-alert-service"
+  IMAGE_REPOSITORY: "nexus.sedrapro.com:8444/alert-service"
+  IMAGE_TAG: "${CI_COMMIT_SHORT_SHA}"
+  IMAGE: "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+  BUILDKIT_IMAGE: "nexus.sedrapro.com:8444/buildkit:v0.24.0"
+  GITOPS_BRANCH: "develop"
+  GITOPS_FILE: "applications/alert/kustomization.yaml"
+
+
+build:
+  stage: build
+  tags: 
+    - k8s
+
+  image:
+    name: ${BUILDKIT_IMAGE}
+    entrypoint: [""]
+
+  script:
+
+    - mkdir -p /root/.docker
+
+    - |
+      cat > /root/.docker/config.json <<EOF
+      {
+        "auths": {
+          "nexus.sedrapro.com:8444": {
+            "username": "${NEXUS_USERNAME}",
+            "password": "${NEXUS_PASSWORD}"
+          }
+        }
+      }
+      EOF
+
+    - echo "=========================================="
+    - echo "BuildKit Build"
+    - echo "=========================================="
+    - echo "Service :" ${SERVICE_NAME}
+    - echo "Image   :" ${IMAGE}
+    - echo "Commit  :" ${CI_COMMIT_SHA}
+    - echo "=========================================="
+
+
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context="${CI_PROJECT_DIR}" \
+        --local dockerfile="${CI_PROJECT_DIR}" \
+        --output type=image,name="${IMAGE}",push=true \
+        --export-cache type=registry,ref="${IMAGE_REPOSITORY}:buildcache" \
+        --import-cache type=registry,ref="${IMAGE_REPOSITORY}:buildcache"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    
+
+
+gitops:
+
+  stage: gitops
+  tags:
+    - k8s
+
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
+
+  script:
+
+    - git config --global user.name "gitlab-ci"
+    - git config --global user.email "gitlab-ci@sedrapro.com"
+
+    - |
+      git clone \
+        --branch "${GITOPS_BRANCH}" \
+        "https://${GITOPS_USERNAME}:${GITOPS_PASSWORD}@${GITOPS_REPOSITORY#https://}" \
+        gitops
+
+    - cd gitops
+
+    - echo "=========================================="
+    - echo "GitOps Update"
+    - echo "=========================================="
+    - echo "Service :" "${SERVICE_NAME}"
+    - echo "Image   :" "${IMAGE}"
+    - echo "Tag     :" "${IMAGE_TAG}"
+    - echo "Branch  :" "${GITOPS_BRANCH}"
+    - echo "File    :" "${GITOPS_FILE}"
+    - echo "=========================================="
+
+    - |
+      sed -i "s/newTag:.*/newTag: ${IMAGE_TAG}/" \
+        "${GITOPS_FILE}"
+
+    - echo "Updated kustomization:"
+    - grep "newTag:" "${GITOPS_FILE}"
+
+    - git add "${GITOPS_FILE}"
+
+    - |
+      git commit \
+        -m "Update ${SERVICE_NAME} image to ${IMAGE_TAG}" \
+        || echo "No changes to commit"
+
+    - git push origin "HEAD:${GITOPS_BRANCH}"
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+    
