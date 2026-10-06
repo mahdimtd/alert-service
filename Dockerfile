@@ -24,10 +24,20 @@ COPY src/ ./src
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
+# OpenTelemetry
+RUN pip install --no-cache-dir \
+    opentelemetry-distro \
+    opentelemetry-exporter-otlp-proto-grpc \
+    opentelemetry-instrumentation-fastapi \
+    opentelemetry-instrumentation-sqlalchemy \
+    opentelemetry-instrumentation-redis \
+    opentelemetry-instrumentation-logging
+
+
 RUN chown -R appuser:appuser /app
 
 USER appuser
 
 EXPOSE 1220
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "1220"]
+CMD ["opentelemetry-instrument", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "1220"]
