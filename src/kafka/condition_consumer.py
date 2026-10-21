@@ -18,6 +18,7 @@ logger = logging.getLogger("lifecycle-output-worker")
 BATCH_SIZE = settings.LIFECYCLE_BATCH_SIZE
 POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS
 HEARTBEAT_INTERVAL_SECONDS = settings.HEARTBEAT_INTERVAL_SECONDS
+SNOOZE_CHECK_INTERVAL_SECONDS = settings.SNOOZE_CHECK_INTERVAL_SECONDS
 MAX_RETRY_BACKOFF_SECONDS = 30
 
 
@@ -92,6 +93,34 @@ def _handle_batch_sync(events: list[tuple[str, dict]]) -> int:
         db.close()
 
 
+def _reactivate_expired_snoozes_sync() -> int:
+    db = SessionLocal()
+    try:
+        count = lifecycle.reactivate_expired_snoozes(db)
+        db.commit()
+        return count
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+async def _snooze_expiry_loop(interval_seconds: int = SNOOZE_CHECK_INTERVAL_SECONDS) -> None:
+    """
+    Periodically reactivate alerts whose snooze has expired while their
+    condition is still active. Errors are logged and never stop the loop.
+    """
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            count = await asyncio.to_thread(_reactivate_expired_snoozes_sync)
+            if count:
+                logger.info("Reactivated %d alert(s) after snooze expiry", count)
+        except Exception:
+            logger.exception("Snooze expiry check failed; will retry")
+
+
 async def _heartbeat(stats: dict, interval_seconds: int = HEARTBEAT_INTERVAL_SECONDS) -> None:
     """Periodic liveness line so idle/high-latency periods are visible at INFO."""
     while True:
@@ -132,6 +161,7 @@ async def run_consumer() -> None:
 
     stats: dict = {"batches": 0, "events": 0}
     heartbeat = asyncio.create_task(_heartbeat(stats))
+    snooze_expiry = asyncio.create_task(_snooze_expiry_loop())
     try:
         while True:
             results = await consumer.getmany(timeout_ms=POLL_TIMEOUT_MS, max_records=BATCH_SIZE)
@@ -170,6 +200,7 @@ async def run_consumer() -> None:
             stats["last_offset"] = last.offset
     finally:
         heartbeat.cancel()
+        snooze_expiry.cancel()
         await consumer.stop()
         logger.info("Lifecycle Manager consumer stopped")
 

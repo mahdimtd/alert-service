@@ -48,6 +48,14 @@ def _event_payload(
         "value": str(value),
         "threshold": str(threshold),
         "pattern_threshold_period": str(reading.pattern_threshold_period),
+        "pattern_threshold_daily": (
+            str(reading.pattern_threshold_daily)
+            if reading.pattern_threshold_daily is not None else None
+        ),
+        "pattern_threshold_hourly": (
+            str(reading.pattern_threshold_hourly)
+            if reading.pattern_threshold_hourly is not None else None
+        ),
         "unit": rule.unit,
         "severity": rule.severity,
         "cooldown_minutes": rule.cooldown_minutes,
@@ -67,7 +75,7 @@ def process_reading(db: Session, reading: EnergyReading, rules: list[AlertRule] 
         if value is None:
             continue  # this rule has no usable data in the current reading
 
-        threshold = resolve_threshold(rule, reading.pattern_threshold_period)
+        threshold = resolve_threshold(rule, reading)
         met = rule_condition_met(rule.operator, value, threshold)
 
         transition = condition_state.apply_reading(

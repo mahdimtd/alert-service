@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from src.models.alert_audit_logs import AlertAuditLog
 from src.models.alert_rule import AlertRule
 from src.models.alerts import Alert
+from src.models.condition_states import ConditionState
 from src.outbox import enqueue as enqueue_outbox_event
 from src.schemas.alert_signal import AlertSignal
 
@@ -162,6 +163,13 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
 
     previous_state = existing.state
     was_snoozed = previous_state == "SNOOZED"
+    # A snooze is only "live" until snoozed_until; after that a signal is
+    # allowed to reactivate the alert.
+    snooze_still_active = (
+        was_snoozed
+        and existing.snoozed_until is not None
+        and existing.snoozed_until > now
+    )
 
     within_cooldown = (
         now - existing.last_detected_at
@@ -172,6 +180,15 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
     existing.updated_at = now
     existing.current_value = signal.value
     existing.threshold_value = signal.threshold  # threshold can drift per-reading
+
+    if snooze_still_active:
+        # Respect the user's snooze: record the occurrence, stay SNOOZED,
+        # never notify. The expiry job reactivates it later.
+        _log_event(
+            db, existing.id, "ALERT_UPDATED",
+            from_state=previous_state, to_state=previous_state,
+        )
+        return existing, False
 
     if was_snoozed:
         existing.state = "ACTIVE"
@@ -190,6 +207,54 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
     if should_notify:
         _enqueue_notification_request(db, existing)
     return existing, should_notify
+
+
+def reactivate_expired_snoozes(db: Session, limit: int = 200) -> int:
+    """
+    Bring SNOOZED alerts whose snoozed_until has passed back to ACTIVE, but
+    only if the underlying condition is still ACTIVE in
+    detection.condition_states. Each reactivated alert gets an audit row and
+    a fresh notification.requested (occurrence_count is bumped so the
+    request_key is new).
+
+    If the condition is no longer active the alert is left alone: the
+    pending ConditionCleared event resolves it. Caller must commit.
+    Returns how many alerts were reactivated. SKIP LOCKED makes it safe to
+    run from several processes at once.
+    """
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Alert)
+        .where(
+            Alert.state == "SNOOZED",
+            Alert.snoozed_until.is_not(None),
+            Alert.snoozed_until <= now,
+        )
+        .order_by(Alert.snoozed_until)
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+        .execution_options(populate_existing=True)
+    )
+    reactivated = 0
+    for alert in db.execute(stmt).scalars().all():
+        condition = db.get(ConditionState, (alert.premises_id, alert.rule_id))
+        if condition is None or condition.status != "ACTIVE":
+            continue
+
+        alert.state = "ACTIVE"
+        alert.snoozed_until = None
+        alert.occurrence_count += 1
+        alert.last_detected_at = now
+        alert.updated_at = now
+        _log_event(
+            db, alert.id, "ALERT_REACTIVATED",
+            from_state="SNOOZED", to_state="ACTIVE",
+            metadata={"reason": "snooze_expired"},
+        )
+        _enqueue_notification_request(db, alert)
+        reactivated += 1
+    return reactivated
+
 
 def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None:
     """

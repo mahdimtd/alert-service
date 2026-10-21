@@ -31,6 +31,10 @@ class EnergyReading(BaseModel):
     total_kwh_daily: Decimal
     total_kwh_period: Decimal
     pattern_threshold_period: Decimal
+    # Optional: when upstream omits them, thresholds fall back to values
+    # derived from pattern_threshold_period (see detection/thresholds.py).
+    pattern_threshold_daily: Decimal | None = None
+    pattern_threshold_hourly: Decimal | None = None
 
     tou_bucket: str | None = None
     steps_period: list[TariffStep] = []

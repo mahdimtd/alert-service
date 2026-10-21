@@ -23,5 +23,6 @@ class Settings(BaseSettings):
     DETECTION_RELAY_BATCH_SIZE : int = 500
     KAFKA_POLL_TIMEOUT_MS : int = 1000
     HEARTBEAT_INTERVAL_SECONDS : int = 60
+    SNOOZE_CHECK_INTERVAL_SECONDS : int = 600
 
 settings = Settings()
