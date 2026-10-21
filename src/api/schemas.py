@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class AlertOut(BaseModel):
@@ -28,6 +28,22 @@ class AlertOut(BaseModel):
 
 class SnoozeRequest(BaseModel):
     until: datetime
+
+    @field_validator("until")
+    @classmethod
+    def _normalize_until(cls, v: datetime) -> datetime:
+        # A naive datetime is interpreted as UTC; must be in the future.
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        if v <= datetime.now(timezone.utc):
+            raise ValueError("until must be in the future")
+        return v
+
+
+class AcknowledgeAllOut(BaseModel):
+    premises_id: int
+    acknowledged_count: int
+    alert_ids: list[int]
 
 
 class NotificationOut(BaseModel):

@@ -20,6 +20,14 @@ class LifecycleError(Exception):
     """Raised when a requested lifecycle transition is not valid."""
 
 
+class AlertNotFoundError(LifecycleError):
+    """Raised when the requested alert does not exist."""
+
+
+class InvalidStateError(LifecycleError):
+    """Raised when the alert is in a state that does not allow the transition."""
+
+
 def build_fingerprint(premises_id: int, rule_type: str) -> str:
     """
     Identify a single ongoing occurrence of a rule for a given premises.
@@ -161,6 +169,7 @@ def process_signal(db: Session, signal: AlertSignal) -> tuple[Alert, bool]:
 
     existing.occurrence_count += 1
     existing.last_detected_at = now
+    existing.updated_at = now
     existing.current_value = signal.value
     existing.threshold_value = signal.threshold  # threshold can drift per-reading
 
@@ -195,8 +204,10 @@ def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None
         return None
 
     previous_state = alert.state
+    now = datetime.now(timezone.utc)
     alert.state = "RESOLVED"
-    alert.resolved_at = datetime.now(timezone.utc)
+    alert.resolved_at = now
+    alert.updated_at = now
 
     _log_event(
         db, alert.id, "ALERT_RESOLVED",
@@ -209,20 +220,35 @@ def resolve_alert(db: Session, premises_id: int, rule_type: str) -> Alert | None
     return alert
 
 
-def acknowledge_alert(db: Session, alert_id: int, actor_type: str = "USER") -> Alert:
-    """User has seen the alert. Valid from ACTIVE or SNOOZED."""
-    alert = db.get(Alert, alert_id)
+def _get_alert_locked(db: Session, alert_id: int) -> Alert:
+    """
+    Load an alert with a row lock so a user action cannot interleave with
+    the condition consumer updating the same alert.
+    """
+    stmt = (
+        select(Alert)
+        .where(Alert.id == alert_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    alert = db.execute(stmt).scalar_one_or_none()
     if alert is None:
-        raise LifecycleError(f"Alert {alert_id} not found")
+        raise AlertNotFoundError(f"Alert {alert_id} not found")
+    return alert
+
+
+def _apply_acknowledge(db: Session, alert: Alert, actor_type: str) -> Alert:
     if alert.state not in ("ACTIVE", "SNOOZED"):
-        raise LifecycleError(
-            f"Alert {alert_id} cannot be acknowledged from state {alert.state}"
+        raise InvalidStateError(
+            f"Alert {alert.id} cannot be acknowledged from state {alert.state}"
         )
 
     previous_state = alert.state
+    now = datetime.now(timezone.utc)
     alert.state = "ACKNOWLEDGED"
-    alert.acknowledged_at = datetime.now(timezone.utc)
+    alert.acknowledged_at = now
     alert.snoozed_until = None
+    alert.updated_at = now
 
     _log_event(
         db, alert.id, "ALERT_ACKNOWLEDGED",
@@ -235,25 +261,68 @@ def acknowledge_alert(db: Session, alert_id: int, actor_type: str = "USER") -> A
     return alert
 
 
+def acknowledge_alert(db: Session, alert_id: int, actor_type: str = "USER") -> Alert:
+    """
+    User has seen the alert. Valid from ACTIVE or SNOOZED.
+    Idempotent: acknowledging an already ACKNOWLEDGED alert is a no-op.
+    """
+    alert = _get_alert_locked(db, alert_id)
+    if alert.state == "ACKNOWLEDGED":
+        return alert
+    return _apply_acknowledge(db, alert, actor_type)
+
+
+def acknowledge_all_alerts(
+    db: Session, premises_id: int, actor_type: str = "USER"
+) -> list[Alert]:
+    """
+    "Mark all as read": acknowledge every ACTIVE or SNOOZED alert of a
+    premises in the caller's transaction. Each alert gets its own audit log
+    row and its own alert.acknowledged outbox event. Returns the alerts that
+    were actually changed (empty list if there was nothing to acknowledge).
+    """
+    stmt = (
+        select(Alert)
+        .where(
+            Alert.premises_id == premises_id,
+            Alert.state.in_(("ACTIVE", "SNOOZED")),
+        )
+        .order_by(Alert.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    alerts = list(db.execute(stmt).scalars().all())
+    return [_apply_acknowledge(db, alert, actor_type) for alert in alerts]
+
+
 def snooze_alert(
     db: Session, alert_id: int, until: datetime, actor_type: str = "USER"
 ) -> Alert:
-    """User wants to silence the alert until a given time. Valid from ACTIVE or ACKNOWLEDGED."""
-    alert = db.get(Alert, alert_id)
-    if alert is None:
-        raise LifecycleError(f"Alert {alert_id} not found")
-    if alert.state not in ("ACTIVE", "ACKNOWLEDGED"):
-        raise LifecycleError(
+    """
+    User wants to silence the alert until a given time.
+    Valid from ACTIVE, ACKNOWLEDGED or SNOOZED (re-snoozing extends/shortens it).
+    """
+    if until.tzinfo is None:
+        raise LifecycleError("'until' must be timezone-aware")
+    now = datetime.now(timezone.utc)
+    if until <= now:
+        raise LifecycleError("'until' must be in the future")
+
+    alert = _get_alert_locked(db, alert_id)
+    if alert.state not in ("ACTIVE", "ACKNOWLEDGED", "SNOOZED"):
+        raise InvalidStateError(
             f"Alert {alert_id} cannot be snoozed from state {alert.state}"
         )
 
     previous_state = alert.state
     alert.state = "SNOOZED"
     alert.snoozed_until = until
+    alert.updated_at = now
 
     _log_event(
         db, alert.id, "ALERT_SNOOZED",
         from_state=previous_state, to_state="SNOOZED", actor_type=actor_type,
+        metadata={"snoozed_until": until.isoformat()},
     )
     enqueue_outbox_event(
         db, "ALERT", alert.id, "alert.snoozed",
