@@ -17,6 +17,20 @@ logger = logging.getLogger("detection-output-worker")
 BATCH_SIZE = settings.DETECTION_RELAY_BATCH_SIZE
 
 
+async def _delivery_result(pending) -> BaseException | None:
+    """
+    Resolve one enqueued message to None (broker acknowledged it) or to
+    the exception that prevented delivery.
+    """
+    if isinstance(pending, BaseException):
+        return pending
+    try:
+        await pending  # delivery future: resolves only after the broker ack
+        return None
+    except Exception as exc:
+        return exc
+
+
 def _backoff_seconds(attempt_count: int) -> int:
     # Exponential backoff, capped at 1 hour: base, 2*base, 4*base, ...
     base = settings.DETECTION_OUTBOX_BASE_BACKOFF_SECONDS
@@ -50,9 +64,11 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
         if not events:
             return 0
 
-        # Fire all publishes concurrently; aiokafka coalesces them into
-        # producer-side batches per partition.
-        futures = []
+        # Enqueue messages sequentially so per-partition order matches the
+        # outbox order. `await producer.send()` only puts the message into
+        # the producer batch and returns a delivery future; the broker ack
+        # is awaited below.
+        enqueued = []
         for event in events:
             message = {
                 "event_id": str(event.event_id),
@@ -64,20 +80,23 @@ async def relay_once(producer: AIOKafkaProducer) -> int:
                 "payload": event.payload,
                 "created_at": event.created_at.isoformat(),
             }
-            futures.append((
-                event,
-                producer.send(
+            try:
+                delivery = await producer.send(
                     event.topic,
                     key=event.partition_key.encode(),
                     value=json.dumps(message).encode(),
-                ),
-            ))
+                )
+            except Exception as exc:
+                delivery = exc
+            enqueued.append((event, delivery))
 
-        results = await asyncio.gather(*(fut for _, fut in futures), return_exceptions=True)
+        # Wait for real broker acknowledgements before marking anything as
+        # published.
+        results = await asyncio.gather(*(_delivery_result(d) for _, d in enqueued))
 
         sent = failed = 0
-        for (event, _), result in zip(futures, results):
-            if isinstance(result, BaseException):
+        for (event, _), result in zip(enqueued, results):
+            if result is not None:
                 event.attempt_count += 1
                 event.status = "FAILED"
                 event.error_message = str(result)[:2000]

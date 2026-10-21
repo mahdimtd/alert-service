@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from aiokafka import AIOKafkaConsumer
 from aiokafka.errors import CommitFailedError, KafkaError
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 from src.config import settings
 from src.database import SessionLocal
@@ -17,6 +18,7 @@ logger = logging.getLogger("lifecycle-output-worker")
 BATCH_SIZE = settings.LIFECYCLE_BATCH_SIZE
 POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS
 HEARTBEAT_INTERVAL_SECONDS = settings.HEARTBEAT_INTERVAL_SECONDS
+MAX_RETRY_BACKOFF_SECONDS = 30
 
 
 async def handle_batch(raw_values: list[bytes]) -> int:
@@ -70,6 +72,17 @@ def _handle_batch_sync(events: list[tuple[str, dict]]) -> int:
                 processed += 1
             except lifecycle.LifecycleError:
                 logger.exception("Lifecycle error processing condition event (type=%s)", event_type)
+            except (OperationalError, InterfaceError):
+                # Transient infrastructure problem: abort the batch so it
+                # can be retried as a whole.
+                raise
+            except Exception:
+                # Poison event (bad payload, numeric overflow, constraint
+                # violation, ...): the SAVEPOINT already rolled back this
+                # event only. Skip it so it cannot block the partition.
+                logger.exception(
+                    "Skipping poison condition event (type=%s payload=%r)", event_type, payload,
+                )
         db.commit()
         return processed
     except Exception:
@@ -126,7 +139,20 @@ async def run_consumer() -> None:
             if not messages:
                 continue
 
-            await handle_batch([msg.value for msg in messages])
+            raw_values = [msg.value for msg in messages]
+            attempt = 0
+            while True:
+                try:
+                    await handle_batch(raw_values)
+                    break
+                except Exception:
+                    # Transient failure (DB down, deadlock, ...). Retry the
+                    # same in-memory batch with capped exponential backoff
+                    # instead of crashing the whole process.
+                    attempt += 1
+                    delay = min(2 ** attempt, MAX_RETRY_BACKOFF_SECONDS)
+                    logger.exception("Batch failed (attempt %d); retrying in %ds", attempt, delay)
+                    await asyncio.sleep(delay)
             try:
                 await consumer.commit()
             except (CommitFailedError, KafkaError):
