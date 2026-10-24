@@ -17,7 +17,7 @@ BATCH_SIZE = settings.CONSUMER_BATCH_SIZE
 POLL_TIMEOUT_MS = settings.KAFKA_POLL_TIMEOUT_MS
 HEARTBEAT_INTERVAL_SECONDS = settings.HEARTBEAT_INTERVAL_SECONDS
 MAX_RETRY_BACKOFF_SECONDS = 30
-
+OFFSET = settings.KAFKA_OFFSET
 
 async def handle_batch(raw_values: list[bytes]) -> int:
     """
@@ -105,7 +105,7 @@ async def run_consumer() -> None:
         bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
         group_id=settings.KAFKA_CONSUMER_GROUP,
         enable_auto_commit=False,
-        auto_offset_reset="earliest",
+        auto_offset_reset=OFFSET,
         max_poll_records=BATCH_SIZE,
         # tolerate long GC pauses / network blips without getting kicked:
         max_poll_interval_ms=600_000,   # 10 min between polls is still fine

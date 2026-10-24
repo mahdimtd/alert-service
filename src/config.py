@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS : str
+    KAFKA_OFFSET: str
     KAFKA_CONSUMER_GROUP : str
     LIFECYCLE_KAFKA_CONSUMER_GROUP : str
     METER_READINGS_TOPIC : str

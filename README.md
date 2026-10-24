@@ -4,6 +4,40 @@ Consumes meter readings from Kafka, evaluates them against configurable alert ru
 tracks per-(premises, rule) condition state, and emits alert lifecycle events plus
 notification requests through a transactional-outbox pattern.
 
+
+# input payloud:
+
+```json
+{
+  "premises_id": 1259,
+  "total_kwh_period": 0.05,
+  "total_kwh_daily": 0.001,
+  "total_kwh_hourly": 0.1,
+  "total_kwh_current": 0,
+  "avg30_period": 0.0012,
+  "pattern_status_period": 1,
+  "steps_period": [
+    {
+      "step_from": 0,
+      "step_to": 100
+    },
+    {
+      "step_from": 100,
+      "step_to": 200
+    }
+  ],
+  "pattern_threshold_period": 200,
+  "pattern_threshold_daily": 5,
+  "pattern_threshold_hourly": "0.2777777777777778",
+  "measured_at": "2026-10-18T12:38:17.790849+00:00",
+  "meter_type": "METER",
+  "tou_bucket": "mid",
+  "cost_period": 1.935376,
+  "current_step": 0,
+  "next_step": 100
+}
+```
+
 ## Flow
 
 ```
