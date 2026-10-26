@@ -318,3 +318,11 @@ Before exposing this API to a real frontend, apply the following:
    Either fix the schema or (recommended for production) remove the route /
    put it behind admin auth.
 
+```
+GET  http://localhost:8000/health
+POST http://localhost:8000/alerts/acknowledge-all?premises_id={premises_id}
+POST http://localhost:8000/alerts/{alert_id}/acknowledge
+POST http://localhost:8000/alerts/{alert_id}/snooze
+GET  http://localhost:8000/docs
+GET  http://localhost:8000/openapi.json
+```
