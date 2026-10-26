@@ -26,4 +26,7 @@ class Settings(BaseSettings):
     HEARTBEAT_INTERVAL_SECONDS : int = 60
     SNOOZE_CHECK_INTERVAL_SECONDS : int = 600
 
+    #endpoints
+    DEFAULT_SNOOZE_MINUTES: int = 60
+
 settings = Settings()

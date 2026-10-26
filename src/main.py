@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import alerts, readings
+from src.api.routers import alerts
 
 app = FastAPI(title="Alert Service")
 
@@ -15,7 +15,6 @@ app.add_middleware(
 )
 
 app.include_router(alerts.router)
-app.include_router(readings.router)
 
 
 @app.get("/health")

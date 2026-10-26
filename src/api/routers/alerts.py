@@ -15,7 +15,7 @@ def _raise_http(exc: lifecycle.LifecycleError) -> None:
         raise HTTPException(status_code=409, detail=str(exc))
     raise HTTPException(status_code=400, detail=str(exc))
 
-
+#POST /alerts/acknowledge-all
 @router.post("/acknowledge-all", response_model=AcknowledgeAllOut)
 def acknowledge_all(
     premises_id: int = Query(...),
@@ -37,7 +37,7 @@ def acknowledge_all(
         alert_ids=[a.id for a in alerts],
     )
 
-
+#POST /alerts/{alert_id}/acknowledge
 @router.post("/{alert_id}/acknowledge", response_model=AlertOut)
 def acknowledge_alert(alert_id: int, db: Session = Depends(get_db)):
     try:
@@ -52,11 +52,11 @@ def acknowledge_alert(alert_id: int, db: Session = Depends(get_db)):
     db.refresh(alert)
     return alert
 
-
+#POST /alerts/{alert_id}/snooze
 @router.post("/{alert_id}/snooze", response_model=AlertOut)
-def snooze_alert(alert_id: int, body: SnoozeRequest, db: Session = Depends(get_db)):
+def snooze_alert(alert_id: int, db: Session = Depends(get_db)):
     try:
-        alert = lifecycle.snooze_alert(db, alert_id, until=body.until, actor_type="USER")
+        alert = lifecycle.snooze_alert(db, alert_id, actor_type="USER")
         db.commit()
     except lifecycle.LifecycleError as e:
         db.rollback()

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone,timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -11,6 +11,7 @@ from src.models.alerts import Alert
 from src.models.condition_states import ConditionState
 from src.outbox import enqueue as enqueue_outbox_event
 from src.schemas.alert_signal import AlertSignal
+from src.config import settings
 
 # States in which an alert is still considered "open" (matches the partial
 # unique index on alerts.fingerprint in the database).
@@ -360,18 +361,17 @@ def acknowledge_all_alerts(
     return [_apply_acknowledge(db, alert, actor_type) for alert in alerts]
 
 
+from datetime import datetime, timezone, timedelta
+from src.config import settings
+
 def snooze_alert(
-    db: Session, alert_id: int, until: datetime, actor_type: str = "USER"
+    db: Session, alert_id: int, actor_type: str = "USER"
 ) -> Alert:
     """
-    User wants to silence the alert until a given time.
-    Valid from ACTIVE, ACKNOWLEDGED or SNOOZED (re-snoozing extends/shortens it).
+    User wants to silence the alert. Defaults to settings.DEFAULT_SNOOZE_MINUTES.
     """
-    if until.tzinfo is None:
-        raise LifecycleError("'until' must be timezone-aware")
     now = datetime.now(timezone.utc)
-    if until <= now:
-        raise LifecycleError("'until' must be in the future")
+    until = now + timedelta(minutes=settings.DEFAULT_SNOOZE_MINUTES)
 
     alert = _get_alert_locked(db, alert_id)
     if alert.state not in ("ACTIVE", "ACKNOWLEDGED", "SNOOZED"):
